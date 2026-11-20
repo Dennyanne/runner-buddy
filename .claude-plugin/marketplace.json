@@ -1,0 +1,6 @@
+{
+  "name": "runner-buddy",
+  "owner": { "name": "Dennyanne" },
+  "description": "runner-buddy: a Claude Code mod with a running band above the prompt while Claude works",
+  "plugins": [{ "name": "runner-buddy", "source": "./" }]
+}
