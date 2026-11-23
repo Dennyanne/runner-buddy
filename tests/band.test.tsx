@@ -39,7 +39,8 @@ const BAND = {
   },
 } as const
 
-type On = Parameters<Parameters<typeof test>[1]>[1]
+// `test(name, body)` or `test(name, options, body)`: take the body's form.
+type On = Parameters<Extract<Parameters<typeof test>[1], (...args: never[]) => unknown>>[1]
 
 // `clock` is what `$.clock.now()` answers while drawing; null refuses it.
 function seed(on: On, crew: Crew, stats: Stats | null = STATS, frame = 7, clock: number | null = NOW) {
@@ -233,5 +234,63 @@ test('background subagents keep the band up after the turn ends', async ($, on) 
   seed(on, CREW)
   const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, isWorking: false }, surface: 'desktop' })
   expect(await ui.find({ type: 'Svg' })).toBeDefined()
+  await ui.unmount()
+})
+
+// ---- rate-limit windows ----
+const HOUR = 3_600_000
+
+test('rate limits show each window with its use and time to reset', async ($, on) => {
+  seed(on, EMPTY, {
+    ...STATS,
+    limits: [
+      { kind: 'five_hour', percentUsed: 38.4, resetsAt: new Date(NOW + 2 * HOUR + 13 * 60_000).toISOString() },
+      { kind: 'seven_day', percentUsed: 12, resetsAt: new Date(NOW + 76 * HOUR).toISOString() },
+    ],
+  })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    const row = await allText(ui)
+    expect(row).toContain('5h 38% (2h13m)')
+    expect(row).toContain('주간 12% (3d4h)')
+    expect((await ui.find({ type: 'Text', text: /^38%$/ }))?.props.color).toBe('#4CB782')
+    await ui.unmount()
+  }
+})
+
+for (const [percentUsed, color, name] of [
+  [72, '#E8A33D', 'yellow'],
+  [93.5, '#E5484D', 'red'],
+] as const) {
+  test(`a rate limit at ${percentUsed}% is ${name}`, async ($, on) => {
+    seed(on, EMPTY, { ...STATS, limits: [{ kind: 'five_hour', percentUsed }] })
+    const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+    const pct = await ui.find({ type: 'Text', text: new RegExp(`^${Math.round(percentUsed)}%$`) })
+    expect(pct?.props.color).toBe(color)
+    await ui.unmount()
+  })
+}
+
+test('a window with no reset time, or one already passed, shows no countdown', async ($, on) => {
+  seed(on, EMPTY, {
+    ...STATS,
+    limits: [
+      { kind: 'five_hour', percentUsed: 5 },
+      { kind: 'seven_day', percentUsed: 9, resetsAt: new Date(NOW - 60_000).toISOString() },
+      { kind: 'spend_limit', percentUsed: 41, resetsAt: new Date(NOW + 30 * 60_000).toISOString() },
+    ],
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const row = await allText(ui)
+  expect(row).toContain('5h 5%  주간 9%  한도 41% (30m)')
+  await ui.unmount()
+})
+
+test('with no rate limits (an API key, say) the gauge is left out', async ($, on) => {
+  seed(on, EMPTY, { ...STATS, limits: [] })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const row = await allText(ui)
+  expect(row.includes('5h')).toBe(false)
+  expect(row).toContain('42% 116k 남음  ·  토큰')
   await ui.unmount()
 })
