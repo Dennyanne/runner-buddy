@@ -730,7 +730,7 @@ test('desktop: the flag stands still and the runner moves toward it by the share
   const source = await svgSource(ui)
   // Start at 34 + 6 × 72 = 466; flag fixed at 466 + 300 + 26 = 792; runner at 466 + 0.6 × 300 = 646,
   // gliding from 466 + 0.4 × 300 = 586, i.e. 60 units back.
-  expect(source).toContain('<g class="flag" transform="translate(792.0 48)">')
+  expect(source).toContain('<g class="flag" transform="translate(792.0 45)">')
   expect(source).toContain('<g transform="translate(646 48)">')
   expect(source).toContain('<g class="advance" style="animation-delay: -0.250s">')
   expect(source).toContain('@keyframes advance { from { transform: translateX(-60.0px); }')
@@ -747,7 +747,7 @@ test('desktop: once every step is done the runner reaches the flag, which waves,
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE.map(i => ({ ...i, status: 'completed' as const })), fromShare: 0.2, changedAt: NOW })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
-  expect(source).toContain('<g class="flag" transform="translate(792.0 48)">')
+  expect(source).toContain('<g class="flag" transform="translate(792.0 45)">')
   expect(source).toContain('<g transform="translate(766 48)">')
   expect(source).toContain('cloth wave')
   expect((await ui.find({ type: 'Text', text: /^5\/5$/ }))?.props.color).toBe('#4CB782')
@@ -841,5 +841,15 @@ test('desktop: the jump squashes about the feet, so a landing does not shove the
   const source = await svgSource(ui)
   expect(source).toContain('.jump { transform-box: view-box; transform-origin: 0 0;')
   expect(source).toContain('.cheer { transform-box: view-box; transform-origin: 0 0;')
+  await ui.unmount()
+})
+
+test('desktop: the flag stands far off, small on a faint hill behind the obstacles, so it can stand still while they slide', async ($, on) => {
+  seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE, fromShare: 0.4, changedAt: NOW - 5000 })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source).toContain('<path class="hill"')
+  expect(source).toContain('<g transform="translate(0 -13) scale(0.62)" opacity="0.8">')
+  expect(source.indexOf('class="hill"')).toBeLessThan(source.indexOf('class="obstacles"'))
   await ui.unmount()
 })

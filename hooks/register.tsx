@@ -244,8 +244,12 @@ function shareLeft(td: Todos): number {
   return td.items.length === 0 ? 1 : remainingShare(td.items)
 }
 
-// The finish flag for the todo list: a checkered flag on a pole at a fixed
-// spot, the steps done over it; it waves once all is done.
+// The finish flag for the todo list, far off: small and faint on a low hill
+// past the ground, so it stands still while the near obstacles slide by, as a
+// distant landmark would. The steps done are over it; it waves once all is done.
+const HORIZON = GROUND - 3 // the hill's foot, just behind the obstacles' row
+const HILL_TOP = 13 // the hill's height
+const FAR = 0.62 // the flag's scale, far off
 function flagSvg(td: Todos, flagX: number): string {
   if (td.items.length === 0) return ''
   const { done, total } = todoProgress(td.items)
@@ -255,10 +259,13 @@ function flagSvg(td: Todos, flagX: number): string {
       checks += `<rect x="${1 + col * 3}" y="${-34 + row * 4}" width="3" height="4" fill="${(row + col) % 2 === 0 ? '#2b2b2b' : '#ffffff'}"/>`
     }
   }
-  return `<g class="flag" transform="translate(${flagX.toFixed(1)} ${GROUND})">
+  return `<g class="flag" transform="translate(${flagX.toFixed(1)} ${HORIZON})">
+<path class="hill" d="M -64 0 C -36 0 -22 -${HILL_TOP} 0 -${HILL_TOP} C 22 -${HILL_TOP} 36 0 64 0 Z" fill="#8a8a8a" fill-opacity="0.14"/>
+<g transform="translate(0 -${HILL_TOP}) scale(${FAR})" opacity="0.8">
 <line x1="0" y1="0" x2="0" y2="-35" stroke="#7a7a7a" stroke-width="1.4" stroke-linecap="round"/>
 <g class="${done === total ? 'cloth wave' : 'cloth'}"><rect x="0.6" y="-34.4" width="13" height="8.8" fill="none" stroke="#7a7a7a" stroke-width="0.6"/>${checks}</g>
-<text class="steps" x="7" y="-38" text-anchor="middle">${done}/${total}</text>
+</g>
+<text class="steps" x="${(7 * FAR).toFixed(1)}" y="-${HILL_TOP + 25}" text-anchor="middle">${done}/${total}</text>
 </g>`
 }
 
