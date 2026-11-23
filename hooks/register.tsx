@@ -25,10 +25,10 @@ const REACTION_MS: Record<ReactionKind, number> = { trip: 1200, finish: 2200, st
 const RUNNER = 'runner' // a reaction's target when it is the runner's
 const DOING_MIN_MS = 1000 // a tool's label stays up at least this long, so a quick Read does not flicker
 const BUBBLE_CHARS = 24 // the runner's speech bubble, in characters
-// The finish flag stands still, FLAG_SPAN (less on a narrow band) plus
-// FLAG_NEAR past the runner's start; the runner and its followers move right
-// by the share done, gliding there in ADVANCE_S, and stop FLAG_NEAR short of
-// the flag once all is done.
+// The finish flag stands still at the band's right end (FLAG_SPAN past the
+// most slots when the band's width is not known); the runner and its
+// followers move right by the share done, gliding there in ADVANCE_S, and
+// stop FLAG_NEAR short of the flag once all is done.
 const FLAG_NEAR = 26
 const FLAG_SPAN = 300
 const ADVANCE_S = 0.8
@@ -53,58 +53,18 @@ const LIMIT_CRITICAL = 90
 const LIMIT_LABELS: Record<string, string> = { five_hour: '5h', seven_day: '주간', spend_limit: '한도' }
 
 // ---- vector surfaces (SVG, animated in CSS) ----
-// Obstacles slide left at a steady speed; every character jumps on a fixed
-// period, phased by its distance from the runner, so each clears each obstacle.
+// Every character hops on a fixed period, each a little after the one ahead
+// of it, as if over the same bump, so the crew bounces along in a ripple.
 const SCALE = 0.7 // shown at this fraction of the drawing's units
-const CANVAS = 2400 // px; the band crops the right side, so obstacles reach the edge
+const CANVAS = 2400 // px; the band crops the right side
 const PX_PER_CELL = 7.5 // the band reports code-font cells, not pixels
 const HEIGHT = 76 // drawing units; constant so the band never changes height
-const GROUND = 48 // y of every character's feet and every obstacle's base
+const GROUND = 48 // y of every character's feet
 const STEP = 72 // units between followers' slots
-const START_X = 34 // the runner's place with no followers; the obstacles are laid out from it
-const SPACING = 120 // units between obstacles
-const JUMP_S = 0.9 // seconds per jump, and per obstacle passing
-// Small objects on the floor, each drawn on its base at (0, 0) and kept inside
-// x -5.5..5.5, y -9..0: the jump clears the tallest by about 3 units.
-const OBJECTS: { name: string; svg: string; ascii: string; color: string }[] = [
-  {
-    name: 'bug',
-    color: '#E5484D',
-    ascii: 'o',
-    svg: `<path d="M -4.5 0 A 4.5 5 0 0 1 4.5 0 Z" fill="#E5484D"/><line x1="0" y1="-5" x2="0" y2="0" stroke="#1f1f1f" stroke-width="0.6"/><circle cx="-2" cy="-2.2" r="0.9" fill="#1f1f1f"/><circle cx="2" cy="-2.2" r="0.9" fill="#1f1f1f"/><circle cx="-1.3" cy="-3.9" r="0.6" fill="#1f1f1f"/><circle cx="1.3" cy="-3.9" r="0.6" fill="#1f1f1f"/><circle cx="4.6" cy="-1.6" r="1.6" fill="#1f1f1f"/>`,
-  },
-  {
-    name: 'mushroom',
-    color: '#D9534F',
-    ascii: 'T',
-    svg: `<rect x="-1.6" y="-4.5" width="3.2" height="4.5" rx="1" fill="#F2E6D0"/><path d="M -5 -4 A 5 4.6 0 0 1 5 -4 Z" fill="#D9534F"/><circle cx="-2" cy="-6" r="0.9" fill="#ffffff"/><circle cx="1.6" cy="-6.6" r="0.8" fill="#ffffff"/><circle cx="3.4" cy="-4.8" r="0.6" fill="#ffffff"/>`,
-  },
-  {
-    name: 'coffee',
-    color: '#8B5E3C',
-    ascii: 'u',
-    svg: `<path d="M -1.5 -7.2 q 0.8 -0.8 0 -1.6 M 0.8 -7.2 q 0.8 -0.8 0 -1.6" stroke="#b5b5b5" stroke-width="0.6" fill="none" stroke-linecap="round"/><path d="M 2.3 -5 q 2.6 0 2.6 1.8 q 0 1.8 -2.6 1.8" stroke="#d9d9d9" stroke-width="1.1" fill="none"/><path d="M -4 -6 h 6.6 v 4.4 q 0 1.6 -1.6 1.6 h -3.4 q -1.6 0 -1.6 -1.6 Z" fill="#f4f4f4" stroke="#c4c4c4" stroke-width="0.5"/><rect x="-3.6" y="-5.6" width="5.8" height="1.2" fill="#8B5E3C"/>`,
-  },
-  {
-    name: 'braces',
-    color: '#4F9DDE',
-    ascii: '{',
-    svg: `<path d="M -1.6 -8.5 q -2.2 0 -2.2 2 v 1.4 q 0 1.1 -1.2 1.1 q 1.2 0 1.2 1.1 v 1.4 q 0 2 2.2 2 M 1.6 -8.5 q 2.2 0 2.2 2 v 1.4 q 0 1.1 1.2 1.1 q -1.2 0 -1.2 1.1 v 1.4 q 0 2 -2.2 2" stroke="#4F9DDE" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`,
-  },
-  {
-    name: 'flower',
-    color: '#E0698A',
-    ascii: '*',
-    svg: `<path d="M 0 0 V -5" stroke="#4CB782" stroke-width="1" stroke-linecap="round"/><path d="M 0 -2 q 2.4 -0.4 3 -2.4 q -2.4 0 -3 2.4" fill="#4CB782"/><circle cx="0" cy="-8.2" r="1.5" fill="#E0698A"/><circle cx="-1.8" cy="-6.8" r="1.5" fill="#E0698A"/><circle cx="1.8" cy="-6.8" r="1.5" fill="#E0698A"/><circle cx="-1.1" cy="-5" r="1.5" fill="#E0698A"/><circle cx="1.1" cy="-5" r="1.5" fill="#E0698A"/><circle cx="0" cy="-6.6" r="1.2" fill="#F5C842"/>`,
-  },
-  {
-    name: 'cactus',
-    color: '#3E9E6B',
-    ascii: 'Y',
-    svg: `<rect x="-1.6" y="-8.6" width="3.2" height="8.6" rx="1.6" fill="#3E9E6B"/><path d="M -1.6 -3.6 h -1.4 q -1 0 -1 -1 v -2 M 1.6 -4.6 h 1.4 q 1 0 1 -1 v -1.6" stroke="#3E9E6B" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M -0.6 -6.5 v 0.6 M 0.7 -4 v 0.6" stroke="#2c7a51" stroke-width="0.5" stroke-linecap="round"/>`,
-  },
-]
-const LOOP_S = JUMP_S * OBJECTS.length // the objects' pattern repeats this often
+const START_X = 34 // the runner's place with no followers; the hops' ripple is phased from it
+const RIPPLE = 120 / 0.9 // units per second the hops' ripple runs back along the crew
+const JUMP_S = 0.9 // seconds per hop
+const FLAG_EDGE = 18 // the flag stands this far in from the band's right edge, its cloth and count inside
 
 function escapeXml(text: string): string {
   return text
@@ -246,10 +206,10 @@ function shareLeft(td: Todos): number {
   return td.items.length === 0 ? 1 : remainingShare(td.items)
 }
 
-// The finish flag for the todo list, far off: small and faint on a low hill
-// past the ground, so it stands still while the near obstacles slide by, as a
-// distant landmark would. The steps done are over it; it waves once all is done.
-const HORIZON = GROUND - 3 // the hill's foot, just behind the obstacles' row
+// The finish flag for the todo list, at the band's right end: small and faint
+// on a low hill, a goal in the distance. The steps done are over it; it waves
+// once all is done.
+const HORIZON = GROUND - 3 // the hill's foot, just behind the characters' feet
 const HILL_TOP = 13 // the hill's height
 const FAR = 0.62 // the flag's scale, far off
 function flagSvg(td: Todos, flagX: number): string {
@@ -273,14 +233,13 @@ function flagSvg(td: Todos, flagX: number): string {
 
 // Every animation is phased from `nowMs`, the moment of drawing, so a redrawn
 // SVG (any redraw of the band remounts it) resumes exactly where it was.
-function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh', acts: Reaction[] = [], busy: Doing[] = [], td: Todos = NO_TODOS, span = FLAG_SPAN): string {
+function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh', acts: Reaction[] = [], busy: Doing[] = [], td: Todos = NO_TODOS, flagX = START_X + slots * STEP + FLAG_SPAN + FLAG_NEAR): string {
   const t = nowMs / 1000
   // The runner starts at the left, one slot farther right for each follower's
-  // slot in use, so they have room behind it. The flag stands past the most
-  // slots the band holds; the runner covers the share done of the way there.
+  // slot in use, so they have room behind it. The flag stands at the band's
+  // right end; the runner covers the share done of the way there.
   const room = Math.min(slots, roomOf(state.list))
   const fromRoom = Math.min(slots, state.fromRoom ?? room)
-  const flagX = START_X + slots * STEP + span + FLAG_NEAR
   const placeOf = (r: number, share: number) => {
     const startX = START_X + r * STEP
     return startX + Math.round((1 - share) * (flagX - FLAG_NEAR - startX))
@@ -300,11 +259,10 @@ function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh
   const shiftFrom = placeOf(fromRoom, shareLeft(td)) - runnerX
   const shiftAge = Math.max(0, (nowMs - (state.roomAt ?? 0)) / 1000)
   const width = Math.ceil(CANVAS / SCALE)
-  const speed = SPACING / JUMP_S // units per second
 
-  // A jump peaks when an obstacle is under the character: the anchor's phase,
-  // delayed by the time an obstacle takes to travel from the anchor to it.
-  const jumpDelay = (x: number) => -mod(t - (START_X - x) / speed, JUMP_S)
+  // A hop peaks a little later the farther back a character is: the anchor's
+  // phase, delayed by the ripple's travel from the anchor to it.
+  const jumpDelay = (x: number) => -mod(t - (START_X - x) / RIPPLE, JUMP_S)
 
   const followers = state.list
     .filter(f => f.slot < slots)
@@ -328,22 +286,9 @@ ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id),
   const hidden = state.list.filter(f => f.slot >= slots && f.leftAt === undefined).length
   const more = hidden > 0 ? `<text class="name" x="2" y="${GROUND + 12}" fill="#9a9a9a">+${hidden}</text>` : ''
 
-  // Obstacle k sits half a spacing past the runner at the loop's start; the
-  // pattern of heights repeats every LOOP_S as the row slides one pattern left.
-  let obstacles = ''
-  const first = -Math.ceil(START_X / SPACING) - OBJECTS.length
-  const last = Math.ceil((width - START_X) / SPACING) + OBJECTS.length
-  for (let k = first; k <= last; k++) {
-    const object = OBJECTS[mod(k, OBJECTS.length)]
-    if (!object) continue
-    const x = START_X + SPACING * (k + 0.5)
-    obstacles += `<g class="obstacle ${object.name}" transform="translate(${x.toFixed(1)} ${GROUND})">${object.svg}</g>`
-  }
-  const slideDelay = -mod(t, LOOP_S)
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${HEIGHT}" width="${CANVAS}" height="${Math.round(HEIGHT * SCALE)}" preserveAspectRatio="xMinYMid slice">
 <style>
-.obstacles { animation: slide ${LOOP_S}s linear infinite; }
 /* Squash and stretch about the feet (0, 0), not the group's box: that box
    holds the speed lines, swinging feet and bubble, so its centre wanders and a
    landing squash would shove the body sideways. */
@@ -371,7 +316,6 @@ ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id),
 .exit { transform-box: view-box; transform-origin: 0 0; animation: exit ${EXIT_MS / 1000}s ease-in both; }
 .name { font: 600 13px system-ui, sans-serif; }
 .meta { font: 500 11px system-ui, sans-serif; opacity: 0.75; font-variant-numeric: tabular-nums; }
-@keyframes slide { from { transform: translateX(0); } to { transform: translateX(-${SPACING * OBJECTS.length}px); } }
 @keyframes jump {
   0% { transform: translateY(0) scale(1.1, 0.88); animation-timing-function: ease-out; }
   12% { transform: translateY(0) scale(0.95, 1.06); animation-timing-function: ease-out; }
@@ -410,10 +354,9 @@ ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id),
 @keyframes shift { from { transform: translateX(${shiftFrom.toFixed(1)}px); } to { transform: translateX(0); } }
 @keyframes enter { from { opacity: 0; transform: scale(0.2); } to { opacity: 1; transform: scale(1); } }
 @keyframes exit { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(-14px) scale(0.4); } }
-@media (prefers-reduced-motion: reduce) { .obstacles, .jump, .speed, .footA, .footB, .enter, .exit, .sweat, .pant, .trip, .stars, .cheer, .confetti, .say, .bubble, .advance, .shift, .wave { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .jump, .speed, .footA, .footB, .enter, .exit, .sweat, .pant, .trip, .stars, .cheer, .confetti, .say, .bubble, .advance, .shift, .wave { animation: none; } }
 </style>
 ${flag}
-<g class="obstacles" style="animation-delay: ${slideDelay.toFixed(3)}s">${obstacles}</g>
 ${more}
 <g class="shift" style="animation-delay: -${shiftAge.toFixed(3)}s"><g class="advance" style="animation-delay: -${glideAge.toFixed(3)}s">
 ${followers}
@@ -425,7 +368,7 @@ ${followers}
 // ---- terminal (ASCII) ----
 // Plain ASCII only: wide or ambiguous-width glyphs would jitter on some terminals.
 const T_STEP = 9 // cells between followers' slots
-const T_GAP = 14 // cells between obstacles
+const T_GAP = 14 // ticks between a character's hops
 // The runner's face per mood, four cells like the followers' '(oo)'.
 const RUNNER_SPRITES: Record<Mood, string> = { fresh: '(^^)', tired: '(-;)', exhausted: '(@o)' }
 const FOLLOWER_SPRITE = '(oo)'
@@ -448,10 +391,9 @@ function terminalScene(state: Crew, n: number, cols: number, nowMs: number | nul
   const slots = capacity(cols, 1, T_STEP, 24)
   // The runner starts at the left, a slot farther right for each follower's
   // slot in use, and walks right by the share done toward a fixed flag.
-  const farthest = 2 + slots * T_STEP
-  const span = Math.max(6, Math.min(40, width - farthest - 10))
+  const flagCol = Math.max(2 + slots * T_STEP + 12, width - 3)
   const startCol = 2 + Math.min(slots, roomOf(state.list)) * T_STEP
-  const endCol = farthest + span
+  const endCol = flagCol - 6
   const runnerCol = startCol + Math.round((1 - shareLeft(td)) * (endCol - startCol))
   const blank = (): Cell[] => Array.from({ length: width }, () => ({ ch: ' ' }))
   const air = blank()
@@ -459,19 +401,14 @@ function terminalScene(state: Crew, n: number, cols: number, nowMs: number | nul
   const names = blank()
   const metas = blank()
 
-  // Obstacles slide one cell left per tick.
-  const isObstacle = (x: number) => mod(x + n, T_GAP) === 0
-  // Each obstacle keeps its object as it slides: its index along the floor.
-  for (let x = 0; x < width; x++) {
-    if (!isObstacle(x)) continue
-    const object = OBJECTS[mod((x + n) / T_GAP, OBJECTS.length)]
-    floor[x] = { ch: object?.ascii ?? '^', color: object?.color }
-  }
+  // An unseen bump runs back one cell per tick, every T_GAP cells; a
+  // character is up while one passes under it, so the crew hops in a ripple.
+  const isBump = (x: number) => mod(x + n, T_GAP) === 0
 
   const put = (row: Cell[], col: number, text: string, color?: string) => {
     for (let i = 0; i < text.length; i++) if (col + i >= 0 && col + i < width) row[col + i] = { ch: text[i] ?? ' ', color }
   }
-  // A character is in the air while an obstacle passes under it; a reaction
+  // A character is in the air while a bump passes under it; a reaction
   // takes over: fallen with stars over it, cheering in the air, or stopped.
   const draw = (col: number, sprite: string, color: string, act?: Reaction) => {
     if (act?.kind === 'trip') {
@@ -491,7 +428,7 @@ function terminalScene(state: Crew, n: number, cols: number, nowMs: number | nul
       return
     }
     let isUp = false
-    for (let x = col - 1; x <= col + sprite.length; x++) if (isObstacle(x)) isUp = true
+    for (let x = col - 1; x <= col + sprite.length; x++) if (isBump(x)) isUp = true
     put(isUp ? air : floor, col, sprite, color)
   }
 
@@ -508,7 +445,7 @@ function terminalScene(state: Crew, n: number, cols: number, nowMs: number | nul
   if (td.items.length > 0) {
     // |> on the floor at a fixed spot, past where the runner stops.
     const { done, total } = todoProgress(td.items)
-    const col = endCol + 6
+    const col = flagCol
     put(floor, col, '|', '#7a7a7a')
     put(air, col, '|>', done === total ? '#4CB782' : '#E5484D')
   }
@@ -976,14 +913,15 @@ export const register: Register = on => {
         nowMs = Math.max(st?.at ?? 0, state.stamp)
       }
       const slots = capacity(cols, PX_PER_CELL, STEP * SCALE, 140)
-      // The flag and its count stay inside the band's width.
+      // The flag at the band's right end, just inside it; never nearer than a
+      // short run past the most slots the band holds.
       const view = (cols * PX_PER_CELL) / SCALE
-      const span = Math.max(60, Math.min(FLAG_SPAN, view - (34 + slots * STEP) - FLAG_NEAR - 24))
+      const flagX = Math.round(Math.max(view - FLAG_EDGE, START_X + slots * STEP + 60 + FLAG_NEAR))
       const names = running.map(f => f.label).join(', ')
       return (
         <Box flexDirection="column">
           <Svg
-            source={sceneSvg(state, slots, nowMs, moodOf(st), acts, busy, td, span)}
+            source={sceneSvg(state, slots, nowMs, moodOf(st), acts, busy, td, flagX)}
             height={Math.round(HEIGHT * SCALE)}
             alt={
               running.length > 0
