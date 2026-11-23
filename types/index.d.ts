@@ -46,8 +46,19 @@ export type Reaction = { target: string; kind: ReactionKind; at: number }
 /** A tool call a character is running: `target` as for a reaction, `text` its label, `seq` the call's own number. */
 export type Doing = { target: string; text: string; at: number; seq: number }
 
+export type TodoStatus = 'pending' | 'in_progress' | 'completed'
+/** One step of the session's todo list; `id` only for TaskCreate's tasks. */
+export type TodoItem = { id?: string; text: string; status: TodoStatus }
+/**
+ * The todo list, and where the runner stood before its last change
+ * (`fromShare`, the share still to do then, 1 with no list) and when that
+ * change came, so the runner glides from there toward the flag, even across
+ * redraws.
+ */
+export type Todos = { items: TodoItem[]; fromShare: number; changedAt: number }
+
 declare module 'claude-code' {
   interface PluginState {
-    'runner-buddy': { frame: Frame; crew: Crew; tokens: Tokens; stats: Stats | null; reactions: Reaction[]; doing: Doing[] }
+    'runner-buddy': { frame: Frame; crew: Crew; tokens: Tokens; stats: Stats | null; reactions: Reaction[]; doing: Doing[]; todos: Todos }
   }
 }
