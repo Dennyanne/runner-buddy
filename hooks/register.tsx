@@ -245,7 +245,7 @@ function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh
   // right end; the runner covers the share done of the way there. `flagX` is
   // where the band's width in columns puts the flag, in units: an estimate,
   // used only for the hops' phases and the bubble's room. The drawing itself
-  // places the crew and the flag by the band's real width (`%` of it).
+  // places the crew and the flag by the band's real width (`vw` of it).
   const room = Math.min(slots, roomOf(state.list))
   const fromRoom = Math.min(slots, state.fromRoom ?? room)
   const placeOf = (r: number, share: number) => {
@@ -264,14 +264,15 @@ function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh
   // steps aside (or back) when the followers' room last changed.
   const glideAge = Math.max(0, (nowMs - td.changedAt) / 1000)
   const shiftAge = Math.max(0, (nowMs - (state.roomAt ?? 0)) / 1000)
-  // The crew's place in CSS pixels as `calc(P% + Apx)` of the band's width: a
-  // share `d` done of the way from its start to just short of the flag.
+  // The crew's place as `calc(P vw + A px)`: a share `d` done of the way from
+  // its start to just short of the flag. Drawn as an image, the SVG's `vw` is
+  // the band's real width.
   const crewAt = (r: number, share: number) => {
     const d = 1 - share // shareLeft and a stored fromShare already read 1 with no flag up
     const startPx = SCALE * (START_X + r * STEP)
     const endInsetPx = FLAG_EDGE_PX + SCALE * FLAG_NEAR
     const px = (1 - d) * startPx - d * endInsetPx
-    return `calc(${(d * 100).toFixed(2)}% + ${px.toFixed(1)}px)`
+    return `calc(${(d * 100).toFixed(2)}vw + ${px.toFixed(1)}px)`
   }
   const crewNow = crewAt(room, shareLeft(td))
   const crewFrom = crewAt(room, td.fromShare)
@@ -307,9 +308,14 @@ ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id),
   const more = hidden > 0 ? `<g transform="scale(${SCALE})"><text class="name" x="2" y="${GROUND + 12}" fill="#9a9a9a">+${hidden}</text></g>` : ''
 
 
-  // No viewBox: the drawing's units are the band's CSS pixels, so `100%` is the
-  // band's real width; each part is drawn in units inside a scale(SCALE) group.
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${CANVAS}" height="${Math.round(HEIGHT * SCALE)}">
+  // Drawn 1:1 in CSS pixels, never stretched: the band narrows the image to its
+  // slot, and `slice` keeps the scale at 1 and crops the right instead (as
+  // fitting a 2400-wide picture into a narrower box would otherwise squash
+  // it). Inside an image `100vw` is the image's own width, the band's, so the
+  // crew and the flag are placed from that; each part is drawn in units inside
+  // a scale(SCALE) group.
+  const tall = Math.round(HEIGHT * SCALE)
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${CANVAS}" height="${tall}" viewBox="0 0 ${CANVAS} ${tall}" preserveAspectRatio="xMinYMid slice">
 <style>
 /* Squash and stretch about the feet (0, 0), not the group's box: that box
    holds the speed lines, swinging feet and bubble, so its centre wanders and a
@@ -330,7 +336,6 @@ ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id),
 .dots { font: 700 10px system-ui, sans-serif; fill: #555555; }
 .bubble { animation: pop 0.2s ease-out both; }
 .tool { font: 500 9px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #444444; }
-.crew, .flagpos { transform-box: view-box; }
 .advance { animation: advance ${ADVANCE_S}s cubic-bezier(0.2, 0.8, 0.3, 1) both; }
 .shift { animation: shift ${ADVANCE_S}s cubic-bezier(0.3, 0.7, 0.3, 1) both; }
 .steps { font: 700 9px system-ui, sans-serif; fill: #7a7a7a; font-variant-numeric: tabular-nums; }
@@ -379,7 +384,7 @@ ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id),
 @keyframes exit { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(-14px) scale(0.4); } }
 @media (prefers-reduced-motion: reduce) { .jump, .speed, .footA, .footB, .enter, .exit, .sweat, .pant, .trip, .stars, .cheer, .confetti, .say, .bubble, .advance, .shift, .wave { animation: none; } }
 </style>
-${flag ? `<g class="flagpos" style="transform: translateX(calc(100% - ${FLAG_EDGE_PX.toFixed(1)}px))"><g transform="scale(${SCALE})">${flag}</g></g>` : ''}
+${flag ? `<g class="flagpos" style="transform: translateX(calc(100vw - ${FLAG_EDGE_PX.toFixed(1)}px))"><g transform="scale(${SCALE})">${flag}</g></g>` : ''}
 ${more}
 <g class="crew advance" style="transform: translateX(${crewNow}); animation-delay: -${glideAge.toFixed(3)}s"><g transform="scale(${SCALE})"><g class="shift" style="animation-delay: -${shiftAge.toFixed(3)}s">
 ${followers}
