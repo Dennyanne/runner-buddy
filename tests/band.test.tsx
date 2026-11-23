@@ -84,14 +84,14 @@ test('desktop: runner and named followers jump obstacles, full width, fixed heig
   expect(source.includes('class="dot"')).toBe(false) // no more dots to eat
   expect(source.includes('class="ground"')).toBe(false)
   expect(source.includes('width="2400"')).toBe(true)
-  expect(svg?.props.height).toBe(45)
+  expect(svg?.props.height).toBe(53)
   await ui.unmount()
 })
 
 test('desktop: the band keeps its height with no followers', async ($, on) => {
   seed(on, EMPTY)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await ui.find({ type: 'Svg' }))?.props.height).toBe(45)
+  expect((await ui.find({ type: "Svg" }))?.props.height).toBe(53)
   await ui.unmount()
 })
 
@@ -338,5 +338,60 @@ test('terminal: the scene rows are cut to the band, never wrapped', async ($, on
   const sceneRows = (await units(ui)).slice(0, 3)
   expect(sceneRows.length).toBe(3)
   for (const r of sceneRows) expect(r.length).toBeLessThanOrEqual(39)
+  await ui.unmount()
+})
+
+// ---- subagent model and elapsed time ----
+test('desktop: each follower shows its model and how long it has run under its name', async ($, on) => {
+  const crew: Crew = {
+    stamp: NOW,
+    list: [
+      { id: 'a', label: 'Explore', color: '#4F9DDE', slot: 0, joinedAt: NOW - 5_000, model: 'claude-haiku-5-5' },
+      { id: 'b', label: 'architect', color: '#4CB782', slot: 1, joinedAt: NOW - 3_723_000, model: 'claude-opus-5-5' },
+      { id: 'c', label: 'mystery', color: '#B57EDC', slot: 2, joinedAt: NOW - 42_000 },
+      { id: 'd', label: 'done', color: '#E0698A', slot: 3, joinedAt: NOW - 9_000, leftAt: NOW - 100, model: 'claude-sonnet-5-5' },
+    ],
+  }
+  seed(on, crew)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source).toContain('class="meta" x="0" y="25" text-anchor="middle" fill="#4F9DDE">haiku 0:05<')
+  expect(source).toContain('>o 1:02:03<') // past an hour the model gives way to its initial; the time stays whole
+  expect(source).toContain('>0:42<') // model not known yet: time alone
+  expect(source).toContain('>sonnet 0:08<') // finished: its time stops at leftAt
+  await ui.unmount()
+})
+
+test('desktop: a model outside the known families is shortened to fit', async ($, on) => {
+  seed(on, {
+    stamp: NOW,
+    list: [{ id: 'a', label: 'custom', color: '#4F9DDE', slot: 0, joinedAt: NOW, model: 'claude-experimental-model-x' }],
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await svgSource(ui)).toContain('>exper… 0:00<')
+  await ui.unmount()
+})
+
+test('terminal: a fourth row shows the model initial and time under each name', async ($, on) => {
+  seed(on, {
+    stamp: NOW,
+    list: [
+      { id: 'a', label: 'Explore', color: '#4F9DDE', slot: 0, joinedAt: NOW - 5_000, model: 'claude-haiku-5-5' },
+      { id: 'b', label: 'planner', color: '#4CB782', slot: 1, joinedAt: NOW - 754_000 },
+    ],
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const rows = await units(ui)
+  expect(rows[2]).toContain('Explore')
+  expect(rows[3]).toContain('h 0:05')
+  expect(rows[3]).toContain('12:34')
+  await ui.unmount()
+})
+
+test('terminal: with no followers there is no fourth row', async ($, on) => {
+  seed(on, EMPTY)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const rows = await units(ui)
+  expect(rows[3]?.startsWith('ctx [')).toBe(true) // the usage row comes straight after the names row
   await ui.unmount()
 })

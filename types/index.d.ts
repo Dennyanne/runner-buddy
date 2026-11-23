@@ -9,6 +9,8 @@ export type Follower = {
   joinedAt: number
   /** Set when its agent finished; it fades out, then leaves the list. */
   leftAt?: number
+  /** The model it runs on, as the engine resolved it (`claude-haiku-5-5`); absent until known. */
+  model?: string
 }
 /** The followers, and when the list last changed (keeps redrawn SVG animations in phase). */
 export type Crew = { list: Follower[]; stamp: number }

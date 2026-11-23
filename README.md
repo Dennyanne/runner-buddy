@@ -3,7 +3,7 @@
 A Claude Code mod that draws a small band above the prompt while Claude works.
 
 - **The runner.** A smiling orange blob runs in place and jumps over small objects that slide in from the right (a ladybug, a mushroom, a coffee cup, `{ }` braces, a flower and a cactus), squashing a little when it lands.
-- **Subagents chase it.** Each running subagent appears behind the runner, in a fixed slot, as a frowning blob in its own colour with its name underneath. It jumps the same obstacles, timed to its distance from the runner. A new one pops up in place; a finished one floats up and fades out before it leaves, and the others stay where they are. The band stays up while background subagents are still running after Claude's turn ends.
+- **Subagents chase it.** Each running subagent appears behind the runner, in a fixed slot, as a frowning blob in its own colour with its name underneath and, below that, its model and how long it has run (`haiku 0:42`; past an hour the model shrinks to its initial, `o 1:02:03`, so the time is never cut). It jumps the same obstacles, timed to its distance from the runner. A new one pops up in place; a finished one floats up and fades out before it leaves, and the others stay where they are. The band stays up while background subagents are still running after Claude's turn ends.
 - **Usage row.** Under the drawing, in the style of the oh-my-claudecode HUD:
   `ctx [████░░░░░░] 42% 116k 남음   5h 38% (2h13m)   주간 12% (3d4h)   토큰 in 1.2M / out 34k   캐시 적중 87%   에이전트 3`
   Each part is one unit: on a narrow band whole parts move to the next line instead of breaking in the middle, and a part wider than the band is cut with an ellipsis.
