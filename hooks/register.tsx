@@ -137,11 +137,41 @@ function capacity(cols: number, cellPx: number, step: number, reserve: number): 
   return Math.max(0, Math.min(MAX_SLOTS, Math.floor((cols * cellPx - reserve) / step)))
 }
 
+// How the runner feels, from how full the context is (the context bar's own
+// thresholds): fresh, tired from 70%, exhausted from 85%.
+type Mood = 'fresh' | 'tired' | 'exhausted'
+
+function moodOf(st: Stats | null): Mood {
+  const pct = st?.ctxPercent ?? 0
+  if (pct >= CTX_CRITICAL) return 'exhausted'
+  if (pct >= CTX_WARNING) return 'tired'
+  return 'fresh'
+}
+
+// A drop drawn outside the head, deeper blue with a white rim so it shows on the orange.
+const SWEAT_DROP = `<path d="M 0 -4.5 q 3.4 4.8 0 7 q -3.4 -2.2 0 -7 Z" fill="#3FA9F5" stroke="#ffffff" stroke-width="0.8"/>`
+
+// The runner's face for its mood: a smile; a flat mouth and a sweat drop; an
+// open panting mouth, flushed cheeks and two drops.
+function runnerFace(mood: Mood): string {
+  if (mood === 'fresh') {
+    return `<path d="M 1 -10 Q 4.5 -7.5 8 -10" stroke="#1f1f1f" stroke-width="1.4" fill="none" stroke-linecap="round"/>`
+  }
+  const drop = (x: number, y: number, delayS: number) =>
+    `<g transform="translate(${x} ${y})"><g class="sweat" style="animation-delay: ${delayS}s">${SWEAT_DROP}</g></g>`
+  if (mood === 'tired') {
+    return `<path d="M 2 -10 L 7.5 -10" stroke="#1f1f1f" stroke-width="1.4" stroke-linecap="round"/>${drop(-15, -25, 0)}`
+  }
+  return `<ellipse class="pant" cx="4.8" cy="-9.6" rx="2" ry="2.4" fill="#1f1f1f"/>
+<circle cx="-3" cy="-12" r="2.2" fill="#E5484D" opacity="0.45"/><circle cx="11" cy="-12" r="2" fill="#E5484D" opacity="0.45"/>
+${drop(-15, -25, 0)}${drop(-17, -15, -0.45)}`
+}
+
 // A rounded blob on its feet at (0, 0), facing right. Followers frown with
-// determination; the runner smiles.
-function blob(color: string, isRunner: boolean): string {
+// determination; the runner's face shows its mood.
+function blob(color: string, isRunner: boolean, mood: Mood = 'fresh'): string {
   const face = isRunner
-    ? `<path d="M 1 -10 Q 4.5 -7.5 8 -10" stroke="#1f1f1f" stroke-width="1.4" fill="none" stroke-linecap="round"/>`
+    ? runnerFace(mood)
     : `<path d="M -2 -22 L 3 -20.5 M 10 -22 L 5.5 -20.5" stroke="#1f1f1f" stroke-width="1.4" stroke-linecap="round"/>`
   return `<g class="speed" stroke="${color}"><line x1="-17" y1="-19" x2="-27" y2="-19"/><line x1="-18" y1="-13" x2="-31" y2="-13"/><line x1="-17" y1="-7" x2="-25" y2="-7"/></g>
 <circle class="footA" cx="-5" cy="-3" r="3" fill="${color}"/><circle class="footB" cx="5" cy="-3" r="3" fill="${color}"/>
@@ -155,7 +185,7 @@ ${face}
 
 // Every animation is phased from `nowMs`, the moment of drawing, so a redrawn
 // SVG (any redraw of the band remounts it) resumes exactly where it was.
-function sceneSvg(state: Crew, slots: number, nowMs: number): string {
+function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh'): string {
   const t = nowMs / 1000
   const runnerX = 34 + slots * STEP
   const width = Math.ceil(CANVAS / SCALE)
@@ -206,6 +236,8 @@ function sceneSvg(state: Crew, slots: number, nowMs: number): string {
 .speed { stroke-width: 2; stroke-linecap: round; stroke-dasharray: 6 6; opacity: 0.55; animation: speed 0.3s linear infinite; }
 .footA { animation: foot 0.2s ease-in-out infinite alternate; }
 .footB { animation: foot 0.2s ease-in-out infinite alternate-reverse; }
+.sweat { animation: sweat 0.9s ease-in infinite; }
+.pant { transform-box: fill-box; transform-origin: 50% 50%; animation: pant 0.3s ease-in-out infinite alternate; }
 .enter { transform-box: view-box; transform-origin: 0 0; animation: enter 0.5s cubic-bezier(0.3, 1.5, 0.5, 1) both; }
 .exit { transform-box: view-box; transform-origin: 0 0; animation: exit ${EXIT_MS / 1000}s ease-in both; }
 .name { font: 600 13px system-ui, sans-serif; }
@@ -220,14 +252,16 @@ function sceneSvg(state: Crew, slots: number, nowMs: number): string {
 }
 @keyframes speed { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 12; } }
 @keyframes foot { from { transform: translate(-2px, 0); } to { transform: translate(2px, -2px); } }
+@keyframes sweat { from { opacity: 1; transform: translate(0, 0); } to { opacity: 0; transform: translate(-5px, 6px); } }
+@keyframes pant { from { transform: scale(1, 0.6); } to { transform: scale(1, 1.15); } }
 @keyframes enter { from { opacity: 0; transform: scale(0.2); } to { opacity: 1; transform: scale(1); } }
 @keyframes exit { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(-14px) scale(0.4); } }
-@media (prefers-reduced-motion: reduce) { .obstacles, .jump, .speed, .footA, .footB, .enter, .exit { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .obstacles, .jump, .speed, .footA, .footB, .enter, .exit, .sweat, .pant { animation: none; } }
 </style>
 <g class="obstacles" style="animation-delay: ${slideDelay.toFixed(3)}s">${obstacles}</g>
 ${followers}
 ${more}
-<g transform="translate(${runnerX} ${GROUND})"><g class="jump" style="animation-delay: ${jumpDelay(runnerX).toFixed(3)}s">${blob(RUNNER_COLOR, true)}</g></g>
+<g transform="translate(${runnerX} ${GROUND})"><g class="jump" style="animation-delay: ${jumpDelay(runnerX).toFixed(3)}s">${blob(RUNNER_COLOR, true, mood)}</g></g>
 </svg>`
 }
 
@@ -235,7 +269,8 @@ ${more}
 // Plain ASCII only: wide or ambiguous-width glyphs would jitter on some terminals.
 const T_STEP = 9 // cells between followers' slots
 const T_GAP = 14 // cells between obstacles
-const RUNNER_SPRITE = '(^^)'
+// The runner's face per mood, four cells like the followers' '(oo)'.
+const RUNNER_SPRITES: Record<Mood, string> = { fresh: '(^^)', tired: '(-;)', exhausted: '(@o)' }
 const FOLLOWER_SPRITE = '(oo)'
 
 type Part = { text: string; color?: string; dim?: boolean }
@@ -251,7 +286,7 @@ function rowParts(cells: Cell[]): Part[] {
   return parts
 }
 
-function terminalScene(state: Crew, n: number, cols: number, nowMs: number | null): Part[][] {
+function terminalScene(state: Crew, n: number, cols: number, nowMs: number | null, mood: Mood = 'fresh'): Part[][] {
   const width = Math.max(30, cols - 1)
   const slots = capacity(cols, 1, T_STEP, 24)
   const runnerCol = 2 + slots * T_STEP
@@ -288,7 +323,7 @@ function terminalScene(state: Crew, n: number, cols: number, nowMs: number | nul
     // "h 0:42": the model's initial keeps it inside the slot.
     put(metas, col, followerMeta({ ...f, model: shortModel(f.model)?.[0] }, nowMs, T_STEP - 1), f.color)
   }
-  draw(runnerCol, RUNNER_SPRITE, RUNNER_COLOR)
+  draw(runnerCol, RUNNER_SPRITES[mood], RUNNER_COLOR)
   const rows = [air, floor, names]
   if (metas.some(c => c.ch !== ' ')) rows.push(metas)
   return rows.map(rowParts)
@@ -575,7 +610,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           <Svg
-            source={sceneSvg(state, slots, nowMs)}
+            source={sceneSvg(state, slots, nowMs, moodOf(st))}
             height={Math.round(HEIGHT * SCALE)}
             alt={
               running.length > 0
@@ -589,7 +624,7 @@ export const register: Register = on => {
     }
 
     const n = await read($, frame)
-    const rows = terminalScene(state, n, cols, st?.at ?? null)
+    const rows = terminalScene(state, n, cols, st?.at ?? null, moodOf(st))
     return (
       <Box flexDirection="column">
         {/* Each scene row is one line cut to the band, never wrapped: a wrap would

@@ -395,3 +395,40 @@ test('terminal: with no followers there is no fourth row', async ($, on) => {
   expect(rows[3]?.startsWith('ctx [')).toBe(true) // the usage row comes straight after the names row
   await ui.unmount()
 })
+
+// ---- the runner tires as the context fills ----
+for (const [ctxPercent, mood, sprite] of [
+  [42, 'fresh', '(^^)'],
+  [75, 'tired', '(-;)'],
+  [88, 'exhausted', '(@o)'],
+] as const) {
+  test(`at ${ctxPercent}% context the runner is ${mood}`, async ($, on) => {
+    seed(on, EMPTY, { ...STATS, ctxPercent, ctxTokens: ctxPercent * 2_000 }, 0)
+    const desktop = await $.ui.mount({ ...BAND, surface: 'desktop' })
+    const source = await svgSource(desktop)
+    const sweat = source.match(/class="sweat"/g)?.length ?? 0
+    expect(sweat).toBe(mood === 'fresh' ? 0 : mood === 'tired' ? 1 : 2)
+    expect(source.includes('class="pant"')).toBe(mood === 'exhausted')
+    expect(source.includes('Q 4.5 -7.5 8 -10')).toBe(mood === 'fresh') // the smile
+    await desktop.unmount()
+    const terminal = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect(await allText(terminal)).toContain(sprite)
+    await terminal.unmount()
+  })
+}
+
+test('the mood changes only the runner: followers keep their frown and the jump is unchanged', async ($, on) => {
+  seed(on, CREW, { ...STATS, ctxPercent: 90, ctxTokens: 180_000 })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source.match(/M -2 -22 L 3 -20.5/g)?.length).toBe(3) // three frowning followers
+  expect(source).toContain('50% { transform: translateY(-18px)') // same jump height
+  await ui.unmount()
+})
+
+test('before the first reading the runner is fresh', async ($, on) => {
+  seed(on, EMPTY, null)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect((await svgSource(ui)).includes('class="sweat"')).toBe(false)
+  await ui.unmount()
+})
