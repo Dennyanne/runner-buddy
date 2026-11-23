@@ -50,9 +50,10 @@ export type TodoStatus = 'pending' | 'in_progress' | 'completed'
 /** One step of the session's todo list; `id` only for TaskCreate's tasks. */
 export type TodoItem = { id?: string; text: string; status: TodoStatus }
 /**
- * The todo list, and how far the finish flag stood before its last change
- * (`fromShare`, the share still to do then) and when that change came, so the
- * flag glides from there, even across redraws.
+ * The todo list, and where the runner stood before its last change
+ * (`fromShare`, the share still to do then, 1 with no list) and when that
+ * change came, so the runner glides from there toward the flag, even across
+ * redraws.
  */
 export type Todos = { items: TodoItem[]; fromShare: number; changedAt: number }
 

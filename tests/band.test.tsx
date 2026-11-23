@@ -723,45 +723,65 @@ test('the todo list follows TaskCreate and TaskUpdate by id', () => {
 
 const FIVE: TodoItem[] = [step('a', 'completed'), step('b', 'completed'), step('c', 'completed'), step('d', 'in_progress'), step('e')]
 
-test('desktop: the finish flag stands past the runner by the share still to do, and glides from where it stood', async ($, on) => {
+test('desktop: the flag stands still and the runner moves toward it by the share done, gliding from where it stood', async ($, on) => {
   // 3 of 5 done; before the last change 3 of 5 were left, 0.25 s ago.
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE, fromShare: 0.6, changedAt: NOW - 250 })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
-  // Runner at 34 + 6 × 72 = 466; flag at 466 + 26 + 0.4 × 300 = 612, from 466 + 26 + 0.6 × 300 = 672.
-  expect(source).toContain('<g transform="translate(612.0 48)"><g class="flagmove" style="animation-delay: -0.250s">')
-  expect(source).toContain('@keyframes flagmove { from { transform: translateX(60.0px); }')
+  // Start at 34 + 6 × 72 = 466; flag fixed at 466 + 300 + 26 = 792; runner at 466 + 0.6 × 300 = 646,
+  // gliding from 466 + 0.4 × 300 = 586, i.e. 60 units back.
+  expect(source).toContain('<g class="flag" transform="translate(792.0 48)">')
+  expect(source).toContain('<g transform="translate(646 48)">')
+  expect(source).toContain('<g class="advance" style="animation-delay: -0.250s">')
+  expect(source).toContain('@keyframes advance { from { transform: translateX(-60.0px); }')
   expect(source).toContain('>3/5</text>')
   expect(source.includes('cloth wave')).toBe(false)
-  expect(source.indexOf('class="flagmove"')).toBeLessThan(source.indexOf('class="obstacles"')) // behind the obstacles
+  expect(source.indexOf('class="flag"')).toBeLessThan(source.indexOf('class="obstacles"')) // behind the obstacles
+  // The obstacles keep their places from the start, not from the runner.
+  expect(source).toContain('transform="translate(526.0 48)"')
   expect(await units(ui)).toContain('할 일 3/5')
   await ui.unmount()
 })
 
-test('desktop: once every step is done the flag reaches the runner and waves, and the count turns green', async ($, on) => {
+test('desktop: once every step is done the runner reaches the flag, which waves, and the count turns green', async ($, on) => {
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE.map(i => ({ ...i, status: 'completed' as const })), fromShare: 0.2, changedAt: NOW })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
-  expect(source).toContain('<g transform="translate(492.0 48)">')
+  expect(source).toContain('<g class="flag" transform="translate(792.0 48)">')
+  expect(source).toContain('<g transform="translate(766 48)">')
   expect(source).toContain('cloth wave')
   expect((await ui.find({ type: 'Text', text: /^5\/5$/ }))?.props.color).toBe('#4CB782')
+  await ui.unmount()
+})
+
+test('desktop: when a finished list is taken down the runner walks back to its start', async ($, on) => {
+  seed(on, EMPTY, STATS, 7, NOW, [], [], { items: [], fromShare: 0, changedAt: NOW - 100 })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source).toContain('<g transform="translate(466 48)">')
+  expect(source).toContain('@keyframes advance { from { transform: translateX(300.0px); }')
+  expect(source.includes('class="flag"')).toBe(false)
   await ui.unmount()
 })
 
 test('with no todo list there is no flag and no count', async ($, on) => {
   seed(on, EMPTY)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await svgSource(ui)).includes('class="flagmove"')).toBe(false)
+  const source = await svgSource(ui)
+  expect(source.includes('class="flag"')).toBe(false)
+  expect(source).toContain('<g transform="translate(466 48)">') // at its start
   expect((await allText(ui)).includes('할 일')).toBe(false)
   await ui.unmount()
 })
 
-test('terminal: a |> flag on the floor, past the runner by the share still to do', async ($, on) => {
+test('terminal: the runner walks toward a fixed |> flag by the share done', async ($, on) => {
   seed(on, EMPTY, STATS, 0, NOW, [], [], { items: FIVE, fromShare: 0.4, changedAt: NOW })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  const [air] = await units(ui)
-  // Runner at column 56; the span is min(40, 139 − 56 − 12) = 40; flag at 56 + 6 + 0.4 × 40 = 78.
-  expect(air?.indexOf('|>')).toBe(78)
+  const [air, floor] = await units(ui)
+  // Start at column 56; the span is min(40, 139 − 56 − 10) = 40; flag at 56 + 40 + 6 = 102;
+  // runner at 56 + 0.6 × 40 = 80.
+  expect(air?.indexOf('|>')).toBe(102)
+  expect(Math.max(air?.indexOf('(^^)') ?? -1, floor?.indexOf('(^^)') ?? -1)).toBe(80)
   expect(await units(ui)).toContain('할 일 3/5')
   await ui.unmount()
 })
@@ -782,7 +802,7 @@ test('a todo call that failed changes nothing', async ($, on) => {
   on('tool.call', () => ({ isError: true as const, result: {}, text: 'bad input' }))
   await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'a', status: 'pending', activeForm: 'A' }] } as never).catch(() => undefined)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await svgSource(ui)).includes('class="flagmove"')).toBe(false)
+  expect((await svgSource(ui)).includes('class="flag"')).toBe(false)
   await ui.unmount()
 })
 
@@ -794,5 +814,32 @@ test("the app's own bookkeeping calls (task list, wrap-up) put up no speech bubb
   const source = await svgSource(ui)
   expect(source.includes('class="bubble"')).toBe(false)
   expect(source).toContain('>0/1</text>') // the list itself still counts
+  await ui.unmount()
+})
+
+test("desktop: the runner's bubble is cut to the room before the flag, and left out at the flag", async ($, on) => {
+  const doingNow = [{ target: 'runner', text: '$ claude plugin test --verbose', at: NOW - 100, seq: 1 }]
+  // 4 of 5 done: runner at 466 + 240 = 706, flag at 792; room ((792 − 706 − 4) / 1.1 − 25) / 5.5 = 9 letters.
+  const four = FIVE.map((i, n) => ({ ...i, status: n < 4 ? ('completed' as const) : ('in_progress' as const) }))
+  seed(on, EMPTY, STATS, 7, NOW, [], doingNow, { items: four, fromShare: 0.2, changedAt: NOW - 5000 })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await svgSource(ui)).toContain('>$ claude…</text>')
+  await ui.unmount()
+})
+
+test("desktop: at the flag the runner's bubble is left out", async ($, on) => {
+  const doingNow = [{ target: 'runner', text: '$ ls', at: NOW - 100, seq: 1 }]
+  seed(on, EMPTY, STATS, 7, NOW, [], doingNow, { items: FIVE.map(i => ({ ...i, status: 'completed' as const })), fromShare: 0, changedAt: NOW - 5000 })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect((await svgSource(ui)).includes('class="bubble"')).toBe(false)
+  await ui.unmount()
+})
+
+test('desktop: the jump squashes about the feet, so a landing does not shove the body sideways', async ($, on) => {
+  seed(on, EMPTY)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source).toContain('.jump { transform-box: view-box; transform-origin: 0 0;')
+  expect(source).toContain('.cheer { transform-box: view-box; transform-origin: 0 0;')
   await ui.unmount()
 })
