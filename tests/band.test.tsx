@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Crew, Doing, Reaction, Stats } from '../types'
+import { planOf } from '../hooks/plan'
 import { toolLabel } from '../hooks/tool-label'
 
 const NOW = 100_000
@@ -293,9 +294,7 @@ test('a window with no reset time, or one already passed, shows no countdown', a
   const row = await allText(ui)
   expect(row).toContain('5h 5%')
   const groups = await units(ui)
-  expect(groups).toContain('5h 5%')
-  expect(groups).toContain('주간 9%')
-  expect(groups).toContain('한도 41% (30m)')
+  expect(groups).toContain('5h 5%  주간 9%  한도 41% (30m)') // the windows are one unit
   await ui.unmount()
 })
 
@@ -324,7 +323,7 @@ test('the usage row wraps by whole groups, each cut rather than broken, with no 
     expect(row?.props.flexDirection).toBe('row')
     // Every group is its own unit, so a wrap can only fall between them.
     const groups = await units(ui)
-    for (const g of ['5h 38% (2h00m)', '주간 12% (3d4h)', '토큰 in 1.2M / out 34.2k', '캐시 적중 87%', '에이전트 3']) {
+    for (const g of ['5h 38% (2h00m)  주간 12% (3d4h)', '토큰 in 1.2M / out 34.2k', '캐시 적중 87%', '에이전트 3']) {
       expect(groups).toContain(g)
     }
     expect(groups.some(g => g.startsWith('ctx ['))).toBe(true)
@@ -593,5 +592,47 @@ test('a real tool call labels the runner while it runs, and the label outlasts a
   // The call took no time on the frozen clock, so its label is kept up for its minimum.
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect(await svgSource(ui)).toContain('>Edit register.tsx</text>')
+  await ui.unmount()
+})
+
+// ---- the plan: a subscription says so; per-use billing shows its estimate ----
+test('the plan comes from how the session is signed in, else from the rate-limit windows', () => {
+  expect(planOf('claude.ai', false)).toBe('subscription')
+  expect(planOf('console', false)).toBe('usage')
+  expect(planOf('api-key', true)).toBe('usage') // the sign-in wins
+  expect(planOf('bedrock', false)).toBe('usage')
+  expect(planOf(null, true)).toBe('subscription')
+  expect(planOf('none', true)).toBe('subscription')
+  expect(planOf(null, false)).toBe('unknown')
+})
+
+test('on a subscription the row says 구독제 and shows no amount', async ($, on) => {
+  seed(on, EMPTY, { ...STATS, plan: 'subscription', usd: 3.21 })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    expect(await units(ui)).toContain('요금 구독제')
+    expect((await allText(ui)).includes('$')).toBe(false)
+    await ui.unmount()
+  }
+})
+
+test('billed per use, the row shows the estimate, labelled as one', async ($, on) => {
+  seed(on, EMPTY, { ...STATS, plan: 'usage', usd: 0.8412 })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await units(ui)).toContain('요금 ~$0.84 (추정)')
+  await ui.unmount()
+})
+
+test('a price at another model\'s rates is marked, and an unknown plan still shows a known cost', async ($, on) => {
+  seed(on, EMPTY, { ...STATS, plan: 'unknown', usd: 12.5, hasUnknownPrice: true })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await units(ui)).toContain('요금 ~$12.50* (추정)')
+  await ui.unmount()
+})
+
+test('with no plan known and no cost ledger, the 요금 part is left out', async ($, on) => {
+  seed(on, EMPTY, { ...STATS, plan: 'unknown' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect((await allText(ui)).includes('요금')).toBe(false)
   await ui.unmount()
 })
