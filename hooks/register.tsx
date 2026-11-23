@@ -26,6 +26,10 @@ const RED = '#E5484D'
 // Cache hit rate: green from 70%, yellow from 40%, red below (most input billed afresh).
 const CACHE_GOOD = 70
 const CACHE_FAIR = 40
+// Rate-limit windows, after the oh-my-claudecode HUD: yellow from 70%, red from 90%.
+const LIMIT_WARNING = 70
+const LIMIT_CRITICAL = 90
+const LIMIT_LABELS: Record<string, string> = { five_hour: '5h', seven_day: '주간', spend_limit: '한도' }
 
 // ---- vector surfaces (SVG, animated in CSS) ----
 // Obstacles slide left at a steady speed; every character jumps on a fixed
@@ -271,7 +275,38 @@ function cacheColor(percent: number): string {
   return RED
 }
 
-// ctx [████░░░░░░] 42% 116k 남음  ·  토큰 in 1.2M / out 34k  ·  캐시 적중 87%  ·  에이전트 3
+function limitColor(percent: number): string {
+  if (percent >= LIMIT_CRITICAL) return RED
+  if (percent >= LIMIT_WARNING) return YELLOW
+  return GREEN
+}
+
+// How long until a window resets: 43m, 2h13m, 3d4h; null once passed or unknown.
+function formatUntil(resetsAt: string | undefined, nowMs: number): string | null {
+  if (!resetsAt) return null
+  const ms = Date.parse(resetsAt) - nowMs
+  if (!Number.isFinite(ms) || ms <= 0) return null
+  const minutes = Math.ceil(ms / 60_000)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h${String(minutes % 60).padStart(2, '0')}m`
+  return `${Math.floor(hours / 24)}d${hours % 24}h`
+}
+
+// 5h 38% (2h13m)  주간 12% (3d4h)
+function limitParts(st: Stats): Part[] {
+  const parts: Part[] = []
+  for (const limit of st.limits ?? []) {
+    const pct = Math.max(0, Math.round(limit.percentUsed))
+    if (parts.length > 0) parts.push({ text: '  ' })
+    parts.push({ text: `${LIMIT_LABELS[limit.kind] ?? limit.kind} `, dim: true }, { text: `${pct}%`, color: limitColor(pct) })
+    const until = formatUntil(limit.resetsAt, st.at)
+    if (until) parts.push({ text: ` (${until})`, dim: true })
+  }
+  return parts
+}
+
+// ctx [████░░░░░░] 42% 116k 남음  ·  5h 38% (2h13m)  주간 12% (3d4h)  ·  토큰 in 1.2M / out 34k  ·  캐시 적중 87%  ·  에이전트 3
 function statParts(st: Stats | null, crewCount: number, isTerminal: boolean): Part[] {
   const sep: Part = { text: '  ·  ', dim: true }
   const parts: Part[] = [{ text: 'ctx ', dim: true }]
@@ -290,6 +325,8 @@ function statParts(st: Stats | null, crewCount: number, isTerminal: boolean): Pa
     if (pct >= CTX_COMPACT) parts.push({ text: ' /compact?', color })
   }
   if (st !== null) {
+    const limits = limitParts(st)
+    if (limits.length > 0) parts.push(sep, ...limits)
     parts.push(sep, { text: '토큰 ', dim: true }, { text: `in ${formatCount(st.input)} / out ${formatCount(st.output)}` })
     parts.push(sep, { text: '캐시 적중 ', dim: true })
     if (st.input > 0) {
@@ -313,6 +350,11 @@ async function refreshStats($: EngineInterface) {
     input: t.input,
     output: t.output,
     cacheRead: t.cacheRead ?? 0, // absent from a total stored before cache reads were counted
+    limits: usage.rateLimits.map(l => ({
+      kind: l.kind,
+      percentUsed: l.percentUsed,
+      ...(l.resetsAt ? { resetsAt: l.resetsAt } : {}),
+    })),
     at: await $.clock.now(),
   }
   await update($, stats, () => fresh)

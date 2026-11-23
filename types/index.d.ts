@@ -21,9 +21,13 @@ export type Stats = {
   input: number
   output: number
   cacheRead: number
+  /** The account's rate-limit windows, as the last API response reported them; empty without any. */
+  limits?: Limit[]
   /** When these were read, `$.clock.now()` ms: a time base for drawing. */
   at: number
 }
+/** One rate-limit window: `five_hour`, `seven_day`, or a gateway's `spend_limit`. */
+export type Limit = { kind: string; percentUsed: number; resetsAt?: string }
 
 declare module 'claude-code' {
   interface PluginState {
