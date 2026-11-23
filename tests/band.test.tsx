@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import type { Crew, Reaction, Stats } from '../types'
+import type { Crew, Doing, Reaction, Stats } from '../types'
+import { toolLabel } from '../hooks/tool-label'
 
 const NOW = 100_000
 
@@ -43,8 +44,8 @@ const BAND = {
 type On = Parameters<Extract<Parameters<typeof test>[1], (...args: never[]) => unknown>>[1]
 
 // `clock` is what `$.clock.now()` answers while drawing; null refuses it.
-function seed(on: On, crew: Crew, stats: Stats | null = STATS, frame = 7, clock: number | null = NOW, reactions: Reaction[] = []) {
-  const values: Record<string, unknown> = { crew, frame, stats, tokens: { input: 0, output: 0, cacheRead: 0 }, reactions }
+function seed(on: On, crew: Crew, stats: Stats | null = STATS, frame = 7, clock: number | null = NOW, reactions: Reaction[] = [], doing: Doing[] = []) {
+  const values: Record<string, unknown> = { crew, frame, stats, tokens: { input: 0, output: 0, cacheRead: 0 }, reactions, doing }
   on('state.get', (_, e) => ({ value: { value: values[e.key] ?? null, version: 1 } }))
   on('clock.now', () => {
     if (clock === null) throw new Error('refused while drawing')
@@ -510,5 +511,87 @@ test("a subagent's failed tool call trips that subagent, not the runner", async 
   await $.tool.call({ tool: 'Bash', command: 'false', agentId: 'a1' } as never).catch(() => undefined)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await svgSource(ui)).includes('class="trip"')).toBe(false) // a1 is not on the band here, and the runner did not trip
+  await ui.unmount()
+})
+
+// ---- what each character is doing ----
+test('a tool call reads as the tool and the one detail that says what it works on', () => {
+  expect(toolLabel('Edit', { file_path: '/Users/x/project/hooks/register.tsx', old_string: 'a' })).toBe('Edit register.tsx')
+  expect(toolLabel('Read', { file_path: 'C:\\code\\app\\main.ts' })).toBe('Read main.ts')
+  expect(toolLabel('NotebookEdit', { notebook_path: '/n/analysis.ipynb' })).toBe('NotebookEdit analysis.ipynb')
+  expect(toolLabel('Bash', { command: 'npm test -- --watch\necho done' })).toBe('$ npm test -- --watch')
+  expect(toolLabel('Grep', { pattern: 'TODO', path: 'src' })).toBe('Grep TODO')
+  expect(toolLabel('Glob', { pattern: '**/*.tsx' })).toBe('Glob **/*.tsx')
+  expect(toolLabel('WebFetch', { url: 'https://docs.anthropic.com/en/docs' })).toBe('Fetch docs.anthropic.com')
+  expect(toolLabel('WebFetch', { url: 'not a url' })).toBe('Fetch')
+  expect(toolLabel('WebSearch', { query: 'claude code mods' })).toBe('Search claude code mods')
+  expect(toolLabel('Agent', { description: 'Count lines', prompt: 'long…' })).toBe('Agent Count lines')
+  expect(toolLabel('mcp__ccd_turn__update_plan', { items: [] })).toBe('update_plan')
+  expect(toolLabel('Bash', {})).toBe('Bash')
+  expect(toolLabel('SomethingNew', { x: 1 })).toBe('SomethingNew')
+})
+
+const editing: Doing = { target: 'runner', text: 'Edit register.tsx', at: NOW - 200, seq: 1 }
+
+test('desktop: the runner says what it is doing in a bubble beside its head', async ($, on) => {
+  seed(on, EMPTY, STATS, 7, NOW, [], [editing])
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source).toContain('class="bubble"')
+  expect(source).toContain('>Edit register.tsx</text>')
+  // Inside the jump group, so it rides along rather than leaving the band at the top of a jump.
+  expect(source).toMatch(/<g class="jump"[^>]*>(?:(?!<\/svg>)[\s\S])*class="bubble"/)
+  await ui.unmount()
+})
+
+test('desktop: a long label is cut to the bubble', async ($, on) => {
+  seed(on, EMPTY, STATS, 7, NOW, [], [{ ...editing, text: '$ npm run build -- --mode production --verbose' }])
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await svgSource(ui)).toContain('>$ npm run build -- --mo…</text>')
+  await ui.unmount()
+})
+
+test('desktop: while the runner reacts, its bubble steps aside', async ($, on) => {
+  seed(on, EMPTY, STATS, 7, NOW, [{ target: 'runner', kind: 'trip', at: NOW }], [editing])
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect((await svgSource(ui)).includes('class="bubble"')).toBe(false)
+  await ui.unmount()
+})
+
+test("desktop: a follower's second line shows its tool while it runs, then its model and time again", async ($, on) => {
+  const crew: Crew = {
+    stamp: NOW,
+    list: [
+      { id: 'a', label: 'Explore', color: '#4F9DDE', slot: 0, joinedAt: NOW - 5_000, model: 'claude-haiku-5-5' },
+      { id: 'b', label: 'planner', color: '#4CB782', slot: 1, joinedAt: NOW - 8_000, model: 'claude-opus-5-5' },
+    ],
+  }
+  seed(on, crew, STATS, 7, NOW, [], [{ target: 'a', text: 'Grep TODO in src', at: NOW, seq: 2 }])
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source).toContain('fill="#4F9DDE">Grep TODO …</text>') // cut to the slot
+  expect(source).toContain('>opus 0:08</text>') // the other follower is between tools
+  expect(source.includes('class="bubble"')).toBe(false) // the runner is not running one
+  await ui.unmount()
+})
+
+test("terminal: the runner's tool shows under it, a follower's in its fourth row", async ($, on) => {
+  const crew: Crew = { stamp: NOW, list: [{ id: 'a', label: 'Explore', color: '#4F9DDE', slot: 0, joinedAt: NOW - 5_000 }] }
+  seed(on, crew, STATS, 0, NOW, [], [editing, { target: 'a', text: 'Read a.ts', at: NOW, seq: 3 }])
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const rows = await units(ui)
+  expect(rows[2]).toContain('Explore')
+  expect(rows[2]).toContain('Edit register.tsx')
+  expect(rows[3]).toContain('Read a.…') // cut to the follower's 8-cell slot
+  await ui.unmount()
+})
+
+test('a real tool call labels the runner while it runs, and the label outlasts a quick call', async ($, on) => {
+  on('clock.now', () => ({ value: NOW })) // the kit answers no clock by itself
+  on('tool.call', () => ({ result: {} }))
+  await $.tool.call({ tool: 'Edit', file_path: '/p/hooks/register.tsx', old_string: 'a', new_string: 'b' } as never).catch(() => undefined)
+  // The call took no time on the frozen clock, so its label is kept up for its minimum.
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await svgSource(ui)).toContain('>Edit register.tsx</text>')
   await ui.unmount()
 })
