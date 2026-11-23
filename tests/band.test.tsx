@@ -725,12 +725,12 @@ test('desktop: the flag stands still and the runner moves toward it by the share
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE, fromShare: 0.6, changedAt: NOW - 250 })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
-  // 140 columns show 140 × 7.5 / 0.7 = 1500 units; the flag stands 36 in, at 1464, so the way runs
-  // 34 → 1438. Runner at 34 + 0.6 × 1404 = 876, gliding from 34 + 0.4 × 1404 = 596, 280 back.
-  expect(source).toContain('<g class="flag" transform="translate(1464.0 48)">')
-  expect(source).toContain('<g transform="translate(876 48)">')
-  expect(source).toContain('<g class="advance" style="animation-delay: -0.250s">')
-  expect(source).toContain('@keyframes advance { from { transform: translateX(-280.0px); }')
+  // Placed by the band's real width W: the flag's pole 20 + 15 × 0.7 = 30.5 px in from the right; the
+  // runner from 0.7 × 60 = 42 px to 30.5 + 0.7 × 26 = 48.7 px short of the right. 3 of 5 done puts it at
+  // 0.6 W + 0.4 × 42 − 0.6 × 48.7 = 60% − 12.4 px, gliding from 40% + (0.6 × 42 − 0.4 × 48.7) = 40% + 5.7 px.
+  expect(source).toContain('<g class="flagpos" style="transform: translateX(calc(100vw - 30.5px))"><g transform="scale(0.7)"><g class="flag" transform="translate(0.0 48)">')
+  expect(source).toContain('<g class="crew advance" style="transform: translateX(calc(60.00vw + -12.4px)); animation-delay: -0.250s">')
+  expect(source).toContain('@keyframes advance { from { transform: translateX(calc(40.00vw + 5.7px)); } to { transform: translateX(calc(60.00vw + -12.4px)); } }')
   expect(source).toContain('>3/5</text>')
   expect(source.includes('cloth wave')).toBe(false)
   expect(source.indexOf('class="flag"')).toBeLessThan(source.indexOf('class="shift"')) // behind the crew
@@ -742,8 +742,8 @@ test('desktop: once every step is done the runner reaches the flag, which waves,
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE.map(i => ({ ...i, status: 'completed' as const })), fromShare: 0.2, changedAt: NOW })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
-  expect(source).toContain('<g class="flag" transform="translate(1464.0 48)">')
-  expect(source).toContain('<g transform="translate(1438 48)">')
+  expect(source).toContain('<g class="flagpos" style="transform: translateX(calc(100vw - 30.5px))"><g transform="scale(0.7)"><g class="flag" transform="translate(0.0 48)">')
+  expect(source).toContain('style="transform: translateX(calc(100.00vw + -48.7px));') // just short of the flag
   expect(source).toContain('cloth wave')
   expect((await ui.find({ type: 'Text', text: /^5\/5$/ }))?.props.color).toBe('#4CB782')
   await ui.unmount()
@@ -753,8 +753,8 @@ test('desktop: when a finished list is taken down the runner walks back to its s
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: [], fromShare: 0, changedAt: NOW - 100 })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
-  expect(source).toContain('<g transform="translate(34 48)">')
-  expect(source).toContain('@keyframes advance { from { transform: translateX(1404.0px); }')
+  expect(source).toContain('style="transform: translateX(calc(0.00vw + 42.0px));')
+  expect(source).toContain('@keyframes advance { from { transform: translateX(calc(100.00vw + -48.7px)); }')
   expect(source.includes('class="flag"')).toBe(false)
   await ui.unmount()
 })
@@ -764,7 +764,7 @@ test('with no todo list there is no flag and no count', async ($, on) => {
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
   expect(source.includes('class="flag"')).toBe(false)
-  expect(source).toContain('<g transform="translate(34 48)">') // at its start, far left
+  expect(source).toContain('style="transform: translateX(calc(0.00vw + 42.0px));') // at its start, 20 px in
   expect((await allText(ui)).includes('할 일')).toBe(false)
   await ui.unmount()
 })
@@ -847,8 +847,9 @@ test('desktop: the flag stands full size on the ground; its cloth ends as far in
   const source = await svgSource(ui)
   expect(source.includes('class="hill"')).toBe(false)
   expect(source.includes('scale(0.62)')).toBe(false)
-  // The runner's body starts at 34 − 12 = 22 from the left; the cloth ends at 1464 + 13.6, 22.4 from 1500.
-  expect(source).toContain('<g class="flag" transform="translate(1464.0 48)">')
+  // The leftmost speed line starts 0.7 × (60 − 31) ≈ 20 px from the left; the count and cloth end
+  // 30.5 − 0.7 × 15 = 20 px from the right.
+  expect(source).toContain('<g class="flagpos" style="transform: translateX(calc(100vw - 30.5px))"><g transform="scale(0.7)"><g class="flag" transform="translate(0.0 48)">')
   expect(source).toContain('<rect x="0.6" y="-34.4" width="13"')
   await ui.unmount()
 })
@@ -859,8 +860,8 @@ test('a list of one or two steps puts up no flag and the runner stays at its sta
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
   expect(source.includes('class="flag"')).toBe(false)
-  expect(source).toContain('<g transform="translate(34 48)">')
-  expect(source).toContain('@keyframes advance { from { transform: translateX(0.0px); }')
+  expect(source).toContain('style="transform: translateX(calc(0.00vw + 42.0px));')
+  expect(source).toContain('@keyframes advance { from { transform: translateX(calc(0.00vw + 42.0px)); }')
   expect(await units(ui)).toContain('할 일 1/2')
   await ui.unmount()
 })
@@ -878,11 +879,11 @@ test('desktop: the runner starts at the left, a slot farther right for each foll
   seed(on, CREW) // three followers, slots 0 to 2
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
-  // 34 + 3 × 72 = 250; its followers behind it at 178, 106 and 34.
-  expect(source).toContain('<g transform="translate(250 48)">')
-  expect(source).toContain('<g transform="translate(178 48)">')
-  expect(source).toContain('<g transform="translate(106 48)">')
-  expect(source).toContain('<g transform="translate(34 48)">')
+  // 0.7 × (60 + 3 × 72) = 193.2 px in; its followers 72, 144 and 216 units behind it.
+  expect(source).toContain('style="transform: translateX(calc(0.00vw + 193.2px));')
+  expect(source).toContain('<g transform="translate(-72 48)">')
+  expect(source).toContain('<g transform="translate(-144 48)">')
+  expect(source).toContain('<g transform="translate(-216 48)">')
   await ui.unmount()
 })
 
@@ -919,10 +920,50 @@ test('the crew remembers its room when a follower joins or leaves, and only then
   expect(roomOf([CREW.list[2]!])).toBe(3) // a gap left by others still counts up to the farthest
 })
 
-test('desktop: the flag stands at the right end of a narrower band too', async ($, on) => {
+test("desktop: the flag and crew are placed by the band's real width, whatever its width in columns", async ($, on) => {
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE, fromShare: 0.4, changedAt: NOW - 5000 })
   const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 100 }, surface: 'desktop' })
-  // 100 columns show 100 × 7.5 / 0.7 ≈ 1071 units; the flag stands 36 in.
-  expect(await svgSource(ui)).toContain('<g class="flag" transform="translate(1035.0 48)">')
+  const source = await svgSource(ui)
+  // Drawn 1:1 (`slice` crops, never squashes), and placed in `vw`, the image's own width: nothing hangs
+  // on the columns-to-pixels estimate.
+  expect(source).toMatch(/^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" width="2400" height="53" viewBox="0 0 2400 53" preserveAspectRatio="xMinYMid slice">/)
+  expect(source).toContain('<g class="flagpos" style="transform: translateX(calc(100vw - 30.5px))"><g transform="scale(0.7)"><g class="flag" transform="translate(0.0 48)">')
+  expect(source).toContain('style="transform: translateX(calc(60.00vw + -12.4px));')
+  await ui.unmount()
+})
+
+test('desktop: once all is done the flag lifts and fades as the runner’s cheer ends', async ($, on) => {
+  // Finished 1 s ago: the 2.2 s cheer's last 0.6 s fade it, from 1.6 s, so 0.6 s from now.
+  seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE.map(i => ({ ...i, status: 'completed' as const })), fromShare: 0.2, changedAt: NOW - 1000 })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await svgSource(ui)).toContain('<g class="flagout" style="animation-delay: 0.600s">')
+  await ui.unmount()
+})
+
+test('reaching the flag makes the runner cheer there while the flag fades', async ($, on) => {
+  on('clock.now', () => ({ value: NOW }))
+  on('tool.call', () => ({ result: {} }))
+  const three = [{ content: 'one', status: 'completed' }, { content: 'two', status: 'completed' }, { content: 'three', status: 'in_progress' }]
+  await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', items: three, scope: 'continuation' } as never).catch(() => undefined)
+  await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'done' } as never).catch(() => undefined)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source).toContain('class="cheer"')
+  expect(source).toContain('class="flagout"')
+  await ui.unmount()
+})
+
+test('when the cheer ends the finished list is taken down and the runner walks back', async ($, on) => {
+  on('clock.now', () => ({ value: NOW }))
+  on('clock.after', () => ({ value: undefined })) // timers fire at once
+  on('tool.call', () => ({ result: {} }))
+  const three = [{ content: 'one', status: 'completed' }, { content: 'two', status: 'completed' }, { content: 'three', status: 'in_progress' }]
+  await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', items: three, scope: 'continuation' } as never).catch(() => undefined)
+  await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'done' } as never).catch(() => undefined)
+  for (let i = 0; i < 50; i++) await Promise.resolve() // let the timer's callback finish
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source.includes('class="flag"')).toBe(false)
+  expect(source).toContain('@keyframes advance { from { transform: translateX(calc(100.00vw + -48.7px)); }')
   await ui.unmount()
 })
