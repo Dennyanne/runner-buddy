@@ -1,9 +1,10 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Crew, Doing, Follower, Reaction, ReactionKind, Stats, Tokens } from '../types'
+import type { Crew, Doing, Follower, Reaction, ReactionKind, Stats, Todos, Tokens } from '../types'
 
 import { planOf } from './plan'
+import { applyTodoCall, remainingShare, todoProgress } from './todos'
 import { toolLabel } from './tool-label'
 
 const frame = atom({ plugin: 'runner-buddy', key: 'frame' } as const, 0)
@@ -12,6 +13,8 @@ const tokens = atom({ plugin: 'runner-buddy', key: 'tokens' } as const, { input:
 const stats = atom({ plugin: 'runner-buddy', key: 'stats' } as const, null as Stats | null)
 const reactions = atom({ plugin: 'runner-buddy', key: 'reactions' } as const, [] as Reaction[])
 const doing = atom({ plugin: 'runner-buddy', key: 'doing' } as const, [] as Doing[])
+const NO_TODOS: Todos = { items: [], fromShare: 0, changedAt: 0 }
+const todos = atom({ plugin: 'runner-buddy', key: 'todos' } as const, NO_TODOS)
 
 const TICK_MS = 120
 const STATS_EVERY = 8 // ticks between usage refreshes (about once a second)
@@ -21,6 +24,13 @@ const REACTION_MS: Record<ReactionKind, number> = { trip: 1200, finish: 2200, st
 const RUNNER = 'runner' // a reaction's target when it is the runner's
 const DOING_MIN_MS = 1000 // a tool's label stays up at least this long, so a quick Read does not flicker
 const BUBBLE_CHARS = 24 // the runner's speech bubble, in characters
+// The finish flag stands this far past the runner when all is done, and this
+// much farther for a whole list still to do; a new list's flag glides in from
+// beyond that (NEW_LIST_SHARE of the span).
+const FLAG_NEAR = 26
+const FLAG_SPAN = 300
+const NEW_LIST_SHARE = 1.4
+const FLAG_GLIDE_S = 0.8
 const MAX_SLOTS = 6
 const RUNNER_COLOR = '#D97757'
 const PALETTE = ['#4F9DDE', '#4CB782', '#B57EDC', '#E0698A', '#3FB8AF', '#E8A33D']
@@ -228,11 +238,40 @@ function body(color: string, isRunner: boolean, mood: Mood, jumpDelayS: number, 
   return `${blob(color, isRunner, mood)}<g class="say" style="animation-delay: ${age}"><rect x="9" y="-45" width="20" height="12" rx="6" fill="#ffffff" stroke="#cfcfcf" stroke-width="0.8"/><text x="19" y="-36.5" text-anchor="middle" class="dots">…</text></g>`
 }
 
+// The finish flag for the todo list: a checkered flag on a pole, the steps
+// done over it, standing as far past the runner as the share still to do. It
+// glides from where it stood before the list's last change, phased from that
+// change, and waves once all is done.
+function flagSvg(td: Todos, runnerX: number, nowMs: number): { flag: string; keyframes: string } {
+  if (td.items.length === 0) return { flag: '', keyframes: '' }
+  const { done, total } = todoProgress(td.items)
+  const at = (share: number) => runnerX + FLAG_NEAR + share * FLAG_SPAN
+  const x = at(remainingShare(td.items))
+  const dx = at(td.fromShare) - x
+  const age = Math.max(0, (nowMs - td.changedAt) / 1000)
+  let checks = ''
+  for (let row = 0; row < 2; row++) {
+    for (let col = 0; col < 4; col++) {
+      checks += `<rect x="${1 + col * 3}" y="${-34 + row * 4}" width="3" height="4" fill="${(row + col) % 2 === 0 ? '#2b2b2b' : '#ffffff'}"/>`
+    }
+  }
+  const isDone = done === total
+  return {
+    keyframes: `@keyframes flagmove { from { transform: translateX(${dx.toFixed(1)}px); } to { transform: translateX(0); } }`,
+    flag: `<g transform="translate(${x.toFixed(1)} ${GROUND})"><g class="flagmove" style="animation-delay: -${age.toFixed(3)}s">
+<line x1="0" y1="0" x2="0" y2="-35" stroke="#7a7a7a" stroke-width="1.4" stroke-linecap="round"/>
+<g class="${isDone ? 'cloth wave' : 'cloth'}"><rect x="0.6" y="-34.4" width="13" height="8.8" fill="none" stroke="#7a7a7a" stroke-width="0.6"/>${checks}</g>
+<text class="steps" x="7" y="-38" text-anchor="middle">${done}/${total}</text>
+</g></g>`,
+  }
+}
+
 // Every animation is phased from `nowMs`, the moment of drawing, so a redrawn
 // SVG (any redraw of the band remounts it) resumes exactly where it was.
-function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh', acts: Reaction[] = [], busy: Doing[] = []): string {
+function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh', acts: Reaction[] = [], busy: Doing[] = [], td: Todos = NO_TODOS): string {
   const t = nowMs / 1000
   const runnerX = 34 + slots * STEP
+  const { flag, keyframes: flagKeyframes } = flagSvg(td, runnerX, nowMs)
   const width = Math.ceil(CANVAS / SCALE)
   const speed = SPACING / JUMP_S // units per second
 
@@ -294,6 +333,9 @@ ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id),
 .dots { font: 700 10px system-ui, sans-serif; fill: #555555; }
 .bubble { animation: pop 0.2s ease-out both; }
 .tool { font: 500 9px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #444444; }
+.flagmove { animation: flagmove ${FLAG_GLIDE_S}s cubic-bezier(0.2, 0.8, 0.3, 1) both; }
+.steps { font: 700 9px system-ui, sans-serif; fill: #7a7a7a; font-variant-numeric: tabular-nums; }
+.wave { transform-box: fill-box; transform-origin: 0 50%; animation: wave 0.6s ease-in-out infinite alternate; }
 .enter { transform-box: view-box; transform-origin: 0 0; animation: enter 0.5s cubic-bezier(0.3, 1.5, 0.5, 1) both; }
 .exit { transform-box: view-box; transform-origin: 0 0; animation: exit ${EXIT_MS / 1000}s ease-in both; }
 .name { font: 600 13px system-ui, sans-serif; }
@@ -332,10 +374,13 @@ ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id),
 @keyframes c4 { from { opacity: 1; transform: translate(0, 0) rotate(0deg); } to { opacity: 0; transform: translate(9px, -17px) rotate(-160deg); } }
 @keyframes say { 0% { opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes pop { from { opacity: 0; } to { opacity: 1; } }
+@keyframes wave { from { transform: skewY(-6deg) scaleX(0.94); } to { transform: skewY(5deg) scaleX(1); } }
+${flagKeyframes}
 @keyframes enter { from { opacity: 0; transform: scale(0.2); } to { opacity: 1; transform: scale(1); } }
 @keyframes exit { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(-14px) scale(0.4); } }
-@media (prefers-reduced-motion: reduce) { .obstacles, .jump, .speed, .footA, .footB, .enter, .exit, .sweat, .pant, .trip, .stars, .cheer, .confetti, .say, .bubble { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .obstacles, .jump, .speed, .footA, .footB, .enter, .exit, .sweat, .pant, .trip, .stars, .cheer, .confetti, .say, .bubble, .flagmove, .wave { animation: none; } }
 </style>
+${flag}
 <g class="obstacles" style="animation-delay: ${slideDelay.toFixed(3)}s">${obstacles}</g>
 ${followers}
 ${more}
@@ -364,7 +409,7 @@ function rowParts(cells: Cell[]): Part[] {
   return parts
 }
 
-function terminalScene(state: Crew, n: number, cols: number, nowMs: number | null, mood: Mood = 'fresh', acts: Reaction[] = [], busy: Doing[] = []): Part[][] {
+function terminalScene(state: Crew, n: number, cols: number, nowMs: number | null, mood: Mood = 'fresh', acts: Reaction[] = [], busy: Doing[] = [], td: Todos = NO_TODOS): Part[][] {
   const width = Math.max(30, cols - 1)
   const slots = capacity(cols, 1, T_STEP, 24)
   const runnerCol = 2 + slots * T_STEP
@@ -420,6 +465,14 @@ function terminalScene(state: Crew, n: number, cols: number, nowMs: number | nul
     put(metas, col, tool ? shorten(tool.text, T_STEP - 1) : followerMeta({ ...f, model: shortModel(f.model)?.[0] }, nowMs, T_STEP - 1), f.color)
   }
   draw(runnerCol, RUNNER_SPRITES[mood], RUNNER_COLOR, acts.find(r => r.target === RUNNER))
+  if (td.items.length > 0) {
+    // |> on the floor, past the runner by the share still to do, steps under it.
+    const { done, total } = todoProgress(td.items)
+    const span = Math.max(6, Math.min(40, width - runnerCol - 12))
+    const col = runnerCol + 6 + Math.round(remainingShare(td.items) * span)
+    put(floor, col, '|', '#7a7a7a')
+    put(air, col, '|>', done === total ? '#4CB782' : '#E5484D')
+  }
   const says = busy.find(d => d.target === RUNNER)
   if (says) put(names, runnerCol, shorten(says.text, Math.max(4, width - runnerCol)), RUNNER_COLOR)
   const rows = [air, floor, names]
@@ -474,7 +527,7 @@ function formatUntil(resetsAt: string | undefined, nowMs: number): string | null
 //   4  ctx 42%  에이전트 3
 const DETAIL_LEVELS = 5
 
-function statGroups(st: Stats | null, crewCount: number, isTerminal: boolean, level = 0): Part[][] {
+function statGroups(st: Stats | null, crewCount: number, isTerminal: boolean, level = 0, todo: { done: number; total: number } | null = null): Part[][] {
   const groups: Part[][] = []
   const ctx: Part[] = [{ text: 'ctx ', dim: true }]
   if (st === null || st.ctxPercent === null) {
@@ -530,6 +583,9 @@ function statGroups(st: Stats | null, crewCount: number, isTerminal: boolean, le
       }
     }
   }
+  if (todo && todo.total > 0 && level <= 3) {
+    groups.splice(1, 0, [{ text: '할 일 ', dim: true }, { text: `${todo.done}/${todo.total}`, color: todo.done === todo.total ? GREEN : undefined }])
+  }
   if (crewCount > 0) groups.push([{ text: `에이전트 ${crewCount}`, dim: true }])
   return groups
 }
@@ -565,14 +621,14 @@ function rowWidth(groups: Part[][], level: number): number {
 
 // The most detailed level whose row fits in `cols` cells; the least, cut at
 // its end, when even that does not.
-function fitStats(st: Stats | null, crewCount: number, isTerminal: boolean, cols: number): { groups: Part[][]; level: number } {
+function fitStats(st: Stats | null, crewCount: number, isTerminal: boolean, cols: number, todo: { done: number; total: number } | null = null): { groups: Part[][]; level: number } {
   const room = Math.max(1, cols - 1)
   for (let level = 0; level < DETAIL_LEVELS - 1; level++) {
-    const groups = statGroups(st, crewCount, isTerminal, level)
+    const groups = statGroups(st, crewCount, isTerminal, level, todo)
     if (rowWidth(groups, level) <= room) return { groups, level }
   }
   const level = DETAIL_LEVELS - 1
-  return { groups: statGroups(st, crewCount, isTerminal, level), level }
+  return { groups: statGroups(st, crewCount, isTerminal, level, todo), level }
 }
 
 // How the session is signed in, read once: it does not change within a session.
@@ -698,6 +754,17 @@ async function prune($: EngineInterface) {
 
 let callSeq = 0
 
+// Updates the todo list from a call that succeeded, if it keeps the list,
+// remembering where the flag stood so it glides from there.
+async function followTodos($: EngineInterface, tool: string, input: Record<string, unknown>, result: unknown) {
+  const current = (await read($, todos)) ?? NO_TODOS
+  const items = applyTodoCall(current.items, tool, input, result)
+  if (items === null || JSON.stringify(items) === JSON.stringify(current.items)) return
+  const now = await $.clock.now()
+  const fromShare = current.items.length === 0 ? NEW_LIST_SHARE : remainingShare(current.items)
+  await update($, todos, () => ({ items, fromShare, changedAt: now }))
+}
+
 // Shows `text` as what `target` is doing; returns when it began.
 async function startDoing($: EngineInterface, target: string, text: string, seq: number): Promise<number> {
   const at = await $.clock.now()
@@ -760,12 +827,20 @@ export const register: Register = on => {
     const target = e.agentId ?? RUNNER
     const seq = ++callSeq
     let startedAt: number | null = null
-    try {
-      startedAt = await startDoing($, target, toolLabel(e.tool, e as unknown as Record<string, unknown>), seq)
-    } catch {
-      // No label this time.
+    // The app's own bookkeeping (its task list, its wrap-up) is not work to show.
+    if (!e.tool.startsWith('mcp__ccd_turn__')) {
+      try {
+        startedAt = await startDoing($, target, toolLabel(e.tool, e as unknown as Record<string, unknown>), seq)
+      } catch {
+        // No label this time.
+      }
     }
     const result = await next(e)
+    try {
+      if (result.deny === undefined && result.isError !== true) await followTodos($, e.tool, e as unknown as Record<string, unknown>, result.result)
+    } catch {
+      // The flag is decoration too.
+    }
     try {
       if (startedAt !== null) await endDoing($, target, seq, startedAt)
       if (result.isError === true) await react($, target, 'trip')
@@ -782,6 +857,8 @@ export const register: Register = on => {
     } else {
       isMainWorking = true
       await prune($)
+      const td = (await read($, todos)) ?? NO_TODOS
+      if (td.items.length > 0 && td.items.every(i => i.status === 'completed')) await update($, todos, () => NO_TODOS)
     }
     await refreshStats($)
     return next(e)
@@ -821,6 +898,7 @@ export const register: Register = on => {
     const state = await read($, crew)
     const acts = (await read($, reactions)) ?? [] // none stored yet reads as no reactions
     const busy = (await read($, doing)) ?? []
+    const td = (await read($, todos)) ?? NO_TODOS
     // Shown while Claude works, while background subagents still run, and while
     // a reaction plays out (the cheer after a turn ends).
     if ((!e.props.isWorking && state.list.length === 0 && acts.length === 0) || e.props.hasSurvey) return next(e)
@@ -830,7 +908,7 @@ export const register: Register = on => {
     const cols = e.props.bodyColumns
     const running = state.list.filter(f => f.leftAt === undefined)
     const st = await read($, stats)
-    const { groups, level } = fitStats(st, running.length, e.surface === 'terminal', cols)
+    const { groups, level } = fitStats(st, running.length, e.surface === 'terminal', cols, td.items.length > 0 ? todoProgress(td.items) : null)
     // One line: the groups were chosen to fit, and the row never wraps. Each
     // group is one Text holding its coloured runs, so should the estimate be
     // short, a group is cut with an ellipsis rather than broken.
@@ -862,7 +940,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           <Svg
-            source={sceneSvg(state, slots, nowMs, moodOf(st), acts, busy)}
+            source={sceneSvg(state, slots, nowMs, moodOf(st), acts, busy, td)}
             height={Math.round(HEIGHT * SCALE)}
             alt={
               running.length > 0
@@ -876,7 +954,7 @@ export const register: Register = on => {
     }
 
     const n = await read($, frame)
-    const rows = terminalScene(state, n, cols, st?.at ?? null, moodOf(st), acts, busy)
+    const rows = terminalScene(state, n, cols, st?.at ?? null, moodOf(st), acts, busy, td)
     return (
       <Box flexDirection="column">
         {/* Each scene row is one line cut to the band, never wrapped: a wrap would

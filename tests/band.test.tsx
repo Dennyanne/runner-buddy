@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import type { Crew, Doing, Reaction, Stats } from '../types'
+import type { Crew, Doing, Reaction, Stats, TodoItem, Todos } from '../types'
+import { applyTodoCall, remainingShare } from '../hooks/todos'
 import { planOf } from '../hooks/plan'
 import { toolLabel } from '../hooks/tool-label'
 
@@ -45,8 +46,8 @@ const BAND = {
 type On = Parameters<Extract<Parameters<typeof test>[1], (...args: never[]) => unknown>>[1]
 
 // `clock` is what `$.clock.now()` answers while drawing; null refuses it.
-function seed(on: On, crew: Crew, stats: Stats | null = STATS, frame = 7, clock: number | null = NOW, reactions: Reaction[] = [], doing: Doing[] = []) {
-  const values: Record<string, unknown> = { crew, frame, stats, tokens: { input: 0, output: 0, cacheRead: 0 }, reactions, doing }
+function seed(on: On, crew: Crew, stats: Stats | null = STATS, frame = 7, clock: number | null = NOW, reactions: Reaction[] = [], doing: Doing[] = [], todos: Todos | null = null) {
+  const values: Record<string, unknown> = { crew, frame, stats, tokens: { input: 0, output: 0, cacheRead: 0 }, reactions, doing, todos }
   on('state.get', (_, e) => ({ value: { value: values[e.key] ?? null, version: 1 } }))
   on('clock.now', () => {
     if (clock === null) throw new Error('refused while drawing')
@@ -685,5 +686,113 @@ test('with no plan known and no cost ledger, the 요금 part is left out', async
   seed(on, EMPTY, { ...STATS, plan: 'unknown' })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await allText(ui)).includes('요금')).toBe(false)
+  await ui.unmount()
+})
+
+// ---- the todo list and its finish flag ----
+const step = (text: string, status: TodoItem['status'] = 'pending'): TodoItem => ({ text, status })
+
+test('the todo list follows TodoWrite, update_plan (whole and changes) and wrap_up', () => {
+  const written = applyTodoCall([], 'TodoWrite', { todos: [{ content: 'a', status: 'completed', activeForm: 'A' }, { content: 'b', status: 'in_progress', activeForm: 'B' }] }, {})
+  expect(written).toEqual([step('a', 'completed'), step('b', 'in_progress')])
+
+  const plan = applyTodoCall([], 'mcp__ccd_turn__update_plan', { items: [{ content: 'one', status: 'in_progress' }, { content: 'two', status: 'pending' }, { content: 'three', status: 'pending' }], scope: 'continuation' }, {})!
+  expect(plan.map(i => i.status)).toEqual(['in_progress', 'pending', 'pending'])
+  const advanced = applyTodoCall(plan, 'mcp__ccd_turn__update_plan', { advance: true }, {})!
+  expect(advanced.map(i => i.status)).toEqual(['completed', 'in_progress', 'pending'])
+  const outOfOrder = applyTodoCall(advanced, 'mcp__ccd_turn__update_plan', { done: [2], start: 3 }, {})!
+  expect(outOfOrder.map(i => i.status)).toEqual(['completed', 'completed', 'in_progress'])
+  expect(applyTodoCall(outOfOrder, 'mcp__ccd_turn__wrap_up', { recap: 'done' }, {})!.every(i => i.status === 'completed')).toBe(true)
+
+  expect(applyTodoCall([], 'mcp__ccd_turn__update_plan', { advance: true }, {})).toBeNull() // nothing to advance yet
+  expect(applyTodoCall([], 'mcp__ccd_turn__wrap_up', {}, {})).toBeNull()
+  expect(applyTodoCall(plan, 'Bash', { command: 'ls' }, {})).toBeNull()
+})
+
+test('the todo list follows TaskCreate and TaskUpdate by id', () => {
+  const one = applyTodoCall([], 'TaskCreate', { subject: 'Write tests', description: '…' }, { task: { id: '1', subject: 'Write tests' } })!
+  const two = applyTodoCall(one, 'TaskCreate', { subject: 'Ship it', description: '…' }, { task: { id: '2', subject: 'Ship it' } })!
+  expect(two).toEqual([{ id: '1', text: 'Write tests', status: 'pending' }, { id: '2', text: 'Ship it', status: 'pending' }])
+  const started = applyTodoCall(two, 'TaskUpdate', { taskId: '1', status: 'completed' }, {})!
+  expect(started[0]?.status).toBe('completed')
+  expect(applyTodoCall(started, 'TaskUpdate', { taskId: '2', status: 'deleted' }, {})).toEqual([{ id: '1', text: 'Write tests', status: 'completed' }])
+  expect(applyTodoCall(started, 'TaskUpdate', { taskId: '9', status: 'completed' }, {})).toBeNull() // not a task we know
+  expect(applyTodoCall([], 'TaskCreate', { subject: 'x' }, { error: 'no' })).toBeNull() // no id came back
+  expect(remainingShare(started)).toBe(0.5)
+})
+
+const FIVE: TodoItem[] = [step('a', 'completed'), step('b', 'completed'), step('c', 'completed'), step('d', 'in_progress'), step('e')]
+
+test('desktop: the finish flag stands past the runner by the share still to do, and glides from where it stood', async ($, on) => {
+  // 3 of 5 done; before the last change 3 of 5 were left, 0.25 s ago.
+  seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE, fromShare: 0.6, changedAt: NOW - 250 })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  // Runner at 34 + 6 × 72 = 466; flag at 466 + 26 + 0.4 × 300 = 612, from 466 + 26 + 0.6 × 300 = 672.
+  expect(source).toContain('<g transform="translate(612.0 48)"><g class="flagmove" style="animation-delay: -0.250s">')
+  expect(source).toContain('@keyframes flagmove { from { transform: translateX(60.0px); }')
+  expect(source).toContain('>3/5</text>')
+  expect(source.includes('cloth wave')).toBe(false)
+  expect(source.indexOf('class="flagmove"')).toBeLessThan(source.indexOf('class="obstacles"')) // behind the obstacles
+  expect(await units(ui)).toContain('할 일 3/5')
+  await ui.unmount()
+})
+
+test('desktop: once every step is done the flag reaches the runner and waves, and the count turns green', async ($, on) => {
+  seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE.map(i => ({ ...i, status: 'completed' as const })), fromShare: 0.2, changedAt: NOW })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source).toContain('<g transform="translate(492.0 48)">')
+  expect(source).toContain('cloth wave')
+  expect((await ui.find({ type: 'Text', text: /^5\/5$/ }))?.props.color).toBe('#4CB782')
+  await ui.unmount()
+})
+
+test('with no todo list there is no flag and no count', async ($, on) => {
+  seed(on, EMPTY)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect((await svgSource(ui)).includes('class="flagmove"')).toBe(false)
+  expect((await allText(ui)).includes('할 일')).toBe(false)
+  await ui.unmount()
+})
+
+test('terminal: a |> flag on the floor, past the runner by the share still to do', async ($, on) => {
+  seed(on, EMPTY, STATS, 0, NOW, [], [], { items: FIVE, fromShare: 0.4, changedAt: NOW })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const [air] = await units(ui)
+  // Runner at column 56; the span is min(40, 139 − 56 − 12) = 40; flag at 56 + 6 + 0.4 × 40 = 78.
+  expect(air?.indexOf('|>')).toBe(78)
+  expect(await units(ui)).toContain('할 일 3/5')
+  await ui.unmount()
+})
+
+test('real update_plan calls build the list and move the flag', async ($, on) => {
+  on('clock.now', () => ({ value: NOW }))
+  on('tool.call', () => ({ result: {} }))
+  await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', items: [{ content: 'one', status: 'in_progress' }, { content: 'two', status: 'pending' }, { content: 'three', status: 'pending' }], scope: 'continuation' } as never).catch(() => undefined)
+  await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', advance: true } as never).catch(() => undefined)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await svgSource(ui)).toContain('>1/3</text>')
+  expect(await units(ui)).toContain('할 일 1/3')
+  await ui.unmount()
+})
+
+test('a todo call that failed changes nothing', async ($, on) => {
+  on('clock.now', () => ({ value: NOW }))
+  on('tool.call', () => ({ isError: true as const, result: {}, text: 'bad input' }))
+  await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'a', status: 'pending', activeForm: 'A' }] } as never).catch(() => undefined)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect((await svgSource(ui)).includes('class="flagmove"')).toBe(false)
+  await ui.unmount()
+})
+
+test("the app's own bookkeeping calls (task list, wrap-up) put up no speech bubble", async ($, on) => {
+  on('clock.now', () => ({ value: NOW }))
+  on('tool.call', () => ({ result: {} }))
+  await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', items: [{ content: 'one', status: 'in_progress' }], scope: 'continuation' } as never).catch(() => undefined)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source.includes('class="bubble"')).toBe(false)
+  expect(source).toContain('>0/1</text>') // the list itself still counts
   await ui.unmount()
 })
