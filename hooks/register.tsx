@@ -32,6 +32,10 @@ const BUBBLE_CHARS = 24 // the runner's speech bubble, in characters
 const FLAG_NEAR = 26
 const FLAG_SPAN = 300
 const ADVANCE_S = 0.8
+// Reaching the flag: the runner cheers there (the finish reaction's two hops),
+// the flag lifts and fades over the cheer's last FLAG_FADE_S, and when the
+// cheer ends the list is taken down and the runner walks back to its start.
+const FLAG_FADE_S = 0.6
 const MAX_SLOTS = 6
 const RUNNER_COLOR = '#D97757'
 const PALETTE = ['#4F9DDE', '#4CB782', '#B57EDC', '#E0698A', '#3FB8AF', '#E8A33D']
@@ -220,20 +224,23 @@ function shareLeft(td: Todos): number {
 
 // The finish flag for the todo list: a checkered flag on a pole at the band's
 // right end, the steps done over it; it waves once all is done.
-function flagSvg(td: Todos, flagX: number): string {
+function flagSvg(td: Todos, flagX: number, nowMs = 0): string {
   if (!hasFlag(td)) return ''
   const { done, total } = todoProgress(td.items)
+  // Once all is done it lifts and fades as the runner's cheer ends.
+  const fadeAt = REACTION_MS.finish / 1000 - FLAG_FADE_S
+  const out = done === total ? ` class="flagout" style="animation-delay: ${(fadeAt - Math.max(0, (nowMs - td.changedAt) / 1000)).toFixed(3)}s"` : ''
   let checks = ''
   for (let row = 0; row < 2; row++) {
     for (let col = 0; col < 4; col++) {
       checks += `<rect x="${1 + col * 3}" y="${-34 + row * 4}" width="3" height="4" fill="${(row + col) % 2 === 0 ? '#2b2b2b' : '#ffffff'}"/>`
     }
   }
-  return `<g class="flag" transform="translate(${flagX.toFixed(1)} ${GROUND})">
+  return `<g class="flag" transform="translate(${flagX.toFixed(1)} ${GROUND})"><g${out}>
 <line x1="0" y1="0" x2="0" y2="-35" stroke="#7a7a7a" stroke-width="1.4" stroke-linecap="round"/>
 <g class="${done === total ? 'cloth wave' : 'cloth'}"><rect x="0.6" y="-34.4" width="13" height="8.8" fill="none" stroke="#7a7a7a" stroke-width="0.6"/>${checks}</g>
 <text class="steps" x="7" y="-38" text-anchor="middle">${done}/${total}</text>
-</g>`
+</g></g>`
 }
 
 // Every animation is phased from `nowMs`, the moment of drawing, so a redrawn
@@ -253,7 +260,7 @@ function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh
     return startX + Math.round((1 - share) * (flagX - FLAG_NEAR - startX))
   }
   const runnerX = placeOf(room, shareLeft(td))
-  const flag = flagSvg(td, 0) // drawn at its pole, placed from the right edge below
+  const flag = flagSvg(td, 0, nowMs) // drawn at its pole, placed from the right edge below
   // The runner's bubble stops short of the flag, even stretched by a landing's
   // squash (1.1 wide): cut to the room before it, and left out where not even
   // a few letters fit (at the flag itself).
@@ -339,6 +346,7 @@ ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id),
 .advance { animation: advance ${ADVANCE_S}s cubic-bezier(0.2, 0.8, 0.3, 1) both; }
 .shift { animation: shift ${ADVANCE_S}s cubic-bezier(0.3, 0.7, 0.3, 1) both; }
 .steps { font: 700 9px system-ui, sans-serif; fill: #7a7a7a; font-variant-numeric: tabular-nums; }
+.flagout { animation: flagout ${FLAG_FADE_S}s ease-in both; }
 .wave { transform-box: fill-box; transform-origin: 0 50%; animation: wave 0.6s ease-in-out infinite alternate; }
 .enter { transform-box: view-box; transform-origin: 0 0; animation: enter 0.5s cubic-bezier(0.3, 1.5, 0.5, 1) both; }
 .exit { transform-box: view-box; transform-origin: 0 0; animation: exit ${EXIT_MS / 1000}s ease-in both; }
@@ -377,12 +385,13 @@ ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id),
 @keyframes c4 { from { opacity: 1; transform: translate(0, 0) rotate(0deg); } to { opacity: 0; transform: translate(9px, -17px) rotate(-160deg); } }
 @keyframes say { 0% { opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes pop { from { opacity: 0; } to { opacity: 1; } }
+@keyframes flagout { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-8px); } }
 @keyframes wave { from { transform: skewY(-6deg) scaleX(0.94); } to { transform: skewY(5deg) scaleX(1); } }
 @keyframes advance { from { transform: translateX(${crewFrom}); } to { transform: translateX(${crewNow}); } }
 @keyframes shift { from { transform: translateX(${shiftUnits.toFixed(1)}px); } to { transform: translateX(0); } }
 @keyframes enter { from { opacity: 0; transform: scale(0.2); } to { opacity: 1; transform: scale(1); } }
 @keyframes exit { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(-14px) scale(0.4); } }
-@media (prefers-reduced-motion: reduce) { .jump, .speed, .footA, .footB, .enter, .exit, .sweat, .pant, .trip, .stars, .cheer, .confetti, .say, .bubble, .advance, .shift, .wave { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .jump, .speed, .footA, .footB, .enter, .exit, .sweat, .pant, .trip, .stars, .cheer, .confetti, .say, .bubble, .advance, .shift, .wave, .flagout { animation: none; } }
 </style>
 ${flag ? `<g class="flagpos" style="transform: translateX(calc(100vw - ${FLAG_EDGE_PX.toFixed(1)}px))"><g transform="scale(${SCALE})">${flag}</g></g>` : ''}
 ${more}
@@ -764,7 +773,24 @@ async function followTodos($: EngineInterface, tool: string, input: Record<strin
   if (items === null || JSON.stringify(items) === JSON.stringify(current.items)) return
   const now = await $.clock.now()
   const fromShare = shareLeft(current)
-  await update($, todos, () => ({ items, fromShare, changedAt: now }))
+  const next: Todos = { items, fromShare, changedAt: now }
+  await update($, todos, () => next)
+  // Reaching the flag: cheer there, then take the list down as the cheer ends,
+  // unless the list has changed meanwhile.
+  const isDone = (td: Todos) => hasFlag(td) && td.items.every(i => i.status === 'completed')
+  if (isDone(next) && !isDone(current)) {
+    await react($, RUNNER, 'finish')
+    $.clock.after(REACTION_MS.finish, () => {
+      void takeDown($, now).catch(() => undefined)
+    })
+  }
+}
+
+// Takes a finished list down, the runner walking back from the flag, if it is
+// still the list finished at `finishedAt`.
+async function takeDown($: EngineInterface, finishedAt: number) {
+  const now = await $.clock.now()
+  await update($, todos, td => (td.changedAt === finishedAt && td.items.length > 0 ? { items: [], fromShare: shareLeft(td), changedAt: now } : td))
 }
 
 // Shows `text` as what `target` is doing; returns when it began.
@@ -892,7 +918,10 @@ export const register: Register = on => {
       // The runner cheers a finished turn, stops at an interruption, trips on an error.
       const kind: ReactionKind | null =
         e.reason === 'answer' ? 'finish' : e.reason === 'aborted' ? 'stop' : e.reason === 'error' ? 'trip' : null
-      if (kind) await react($, RUNNER, kind)
+      // A cheer already playing (the runner just reached the flag) plays on.
+      const now = await $.clock.now()
+      const cheering = ((await read($, reactions)) ?? []).some(r => r.target === RUNNER && r.kind === 'finish' && now - r.at < REACTION_MS.finish)
+      if (kind && !(kind === 'finish' && cheering)) await react($, RUNNER, kind)
       // Background subagents may still be running: keep the band going for them.
       if ((await read($, crew)).list.length === 0) await stop($)
     }

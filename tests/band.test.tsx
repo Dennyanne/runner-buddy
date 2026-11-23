@@ -931,3 +931,39 @@ test("desktop: the flag and crew are placed by the band's real width, whatever i
   expect(source).toContain('style="transform: translateX(calc(60.00vw + -12.4px));')
   await ui.unmount()
 })
+
+test('desktop: once all is done the flag lifts and fades as the runner’s cheer ends', async ($, on) => {
+  // Finished 1 s ago: the 2.2 s cheer's last 0.6 s fade it, from 1.6 s, so 0.6 s from now.
+  seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE.map(i => ({ ...i, status: 'completed' as const })), fromShare: 0.2, changedAt: NOW - 1000 })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await svgSource(ui)).toContain('<g class="flagout" style="animation-delay: 0.600s">')
+  await ui.unmount()
+})
+
+test('reaching the flag makes the runner cheer there while the flag fades', async ($, on) => {
+  on('clock.now', () => ({ value: NOW }))
+  on('tool.call', () => ({ result: {} }))
+  const three = [{ content: 'one', status: 'completed' }, { content: 'two', status: 'completed' }, { content: 'three', status: 'in_progress' }]
+  await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', items: three, scope: 'continuation' } as never).catch(() => undefined)
+  await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'done' } as never).catch(() => undefined)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source).toContain('class="cheer"')
+  expect(source).toContain('class="flagout"')
+  await ui.unmount()
+})
+
+test('when the cheer ends the finished list is taken down and the runner walks back', async ($, on) => {
+  on('clock.now', () => ({ value: NOW }))
+  on('clock.after', () => ({ value: undefined })) // timers fire at once
+  on('tool.call', () => ({ result: {} }))
+  const three = [{ content: 'one', status: 'completed' }, { content: 'two', status: 'completed' }, { content: 'three', status: 'in_progress' }]
+  await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', items: three, scope: 'continuation' } as never).catch(() => undefined)
+  await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'done' } as never).catch(() => undefined)
+  for (let i = 0; i < 50; i++) await Promise.resolve() // let the timer's callback finish
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source.includes('class="flag"')).toBe(false)
+  expect(source).toContain('@keyframes advance { from { transform: translateX(calc(100.00vw + -48.7px)); }')
+  await ui.unmount()
+})
