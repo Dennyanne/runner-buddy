@@ -56,18 +56,21 @@ const LIMIT_LABELS: Record<string, string> = { five_hour: '5h', seven_day: '주�
 // Every character hops on a fixed period, each a little after the one ahead
 // of it, as if over the same bump, so the crew bounces along in a ripple.
 const SCALE = 0.7 // shown at this fraction of the drawing's units
-const CANVAS = 2400 // px; the band crops the right side
-const PX_PER_CELL = 7.5 // the band reports code-font cells, not pixels
+const CANVAS = 2400 // px; the drawing's own width, which the band narrows to its slot
+const PX_PER_CELL = 7.5 // the band reports code-font cells, not pixels: an estimate, for sizing only
 const HEIGHT = 76 // drawing units; constant so the band never changes height
 const GROUND = 48 // y of every character's feet
 const STEP = 72 // units between followers' slots
-const START_X = 34 // the runner's place with no followers; the hops' ripple is phased from it
+// The scene keeps the same margin, in CSS pixels, at both ends of the band:
+// from the left edge to the leftmost character's speed lines (31 units behind
+// it), and from the flag's count and cloth (15 units past its pole) to the
+// right edge.
+const MARGIN_PX = 20
+const START_X = Math.round(MARGIN_PX / 0.7 + 31) // the runner's place with no followers, in units
 const RIPPLE = 120 / 0.9 // units per second the hops' ripple runs back along the crew
 const JUMP_S = 0.9 // seconds per hop
-// The flag stands this far in from the band's right edge: its cloth (13.6
-// wide) then ends as far in from the right as the leftmost body (34 − 12)
-// starts from the left, so the scene is balanced when it first appears.
-const FLAG_EDGE = START_X - 12 + 14
+// The flag's pole stands this far in from the band's right edge, in CSS pixels.
+const FLAG_EDGE_PX = MARGIN_PX + 15 * 0.7
 const FLAG_MIN_STEPS = 3 // a list of fewer steps puts up no flag: too short a run to show
 
 function escapeXml(text: string): string {
@@ -239,7 +242,10 @@ function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh
   const t = nowMs / 1000
   // The runner starts at the left, one slot farther right for each follower's
   // slot in use, so they have room behind it. The flag stands at the band's
-  // right end; the runner covers the share done of the way there.
+  // right end; the runner covers the share done of the way there. `flagX` is
+  // where the band's width in columns puts the flag, in units: an estimate,
+  // used only for the hops' phases and the bubble's room. The drawing itself
+  // places the crew and the flag by the band's real width (`%` of it).
   const room = Math.min(slots, roomOf(state.list))
   const fromRoom = Math.min(slots, state.fromRoom ?? room)
   const placeOf = (r: number, share: number) => {
@@ -247,7 +253,7 @@ function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh
     return startX + Math.round((1 - share) * (flagX - FLAG_NEAR - startX))
   }
   const runnerX = placeOf(room, shareLeft(td))
-  const flag = flagSvg(td, flagX)
+  const flag = flagSvg(td, 0) // drawn at its pole, placed from the right edge below
   // The runner's bubble stops short of the flag, even stretched by a landing's
   // squash (1.1 wide): cut to the room before it, and left out where not even
   // a few letters fit (at the flag itself).
@@ -256,11 +262,22 @@ function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh
   const says = said === undefined || bubbleChars < 4 ? undefined : shorten(said, Math.min(BUBBLE_CHARS, bubbleChars))
   // The crew glides from where it stood before the list's last change, and
   // steps aside (or back) when the followers' room last changed.
-  const glideFrom = placeOf(room, td.fromShare) - runnerX
   const glideAge = Math.max(0, (nowMs - td.changedAt) / 1000)
-  const shiftFrom = placeOf(fromRoom, shareLeft(td)) - runnerX
   const shiftAge = Math.max(0, (nowMs - (state.roomAt ?? 0)) / 1000)
-  const width = Math.ceil(CANVAS / SCALE)
+  // The crew's place in CSS pixels as `calc(P% + Apx)` of the band's width: a
+  // share `d` done of the way from its start to just short of the flag.
+  const crewAt = (r: number, share: number) => {
+    const d = 1 - share // shareLeft and a stored fromShare already read 1 with no flag up
+    const startPx = SCALE * (START_X + r * STEP)
+    const endInsetPx = FLAG_EDGE_PX + SCALE * FLAG_NEAR
+    const px = (1 - d) * startPx - d * endInsetPx
+    return `calc(${(d * 100).toFixed(2)}% + ${px.toFixed(1)}px)`
+  }
+  const crewNow = crewAt(room, shareLeft(td))
+  const crewFrom = crewAt(room, td.fromShare)
+  // Stepping aside for a follower moves the start by whole slots, scaled by
+  // the share of the way still to go.
+  const shiftUnits = shareLeft(td) * (fromRoom - room) * STEP
 
   // A hop peaks a little later the farther back a character is: the anchor's
   // phase, delayed by the ripple's travel from the anchor to it.
@@ -269,7 +286,8 @@ function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh
   const followers = state.list
     .filter(f => f.slot < slots)
     .map(f => {
-      const x = runnerX - (f.slot + 1) * STEP
+      const rel = -(f.slot + 1) * STEP
+      const x = runnerX + rel // its estimated place, for its hop's phase
       const ageS = (nowMs - f.joinedAt) / 1000
       const life =
         f.leftAt === undefined
@@ -278,7 +296,7 @@ function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh
       const label = escapeXml(shorten(f.label, 9))
       const tool = busy.find(d => d.target === f.id)
       const meta = escapeXml(tool ? shorten(tool.text, 11) : followerMeta(f, nowMs, 11))
-      return `<g transform="translate(${x} ${GROUND})"><g ${life}>
+      return `<g transform="translate(${rel} ${GROUND})"><g ${life}>
 ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id), nowMs)}
 <text class="name" x="0" y="12" text-anchor="middle" fill="${f.color}">${label}</text>
 <text class="meta" x="0" y="25" text-anchor="middle" fill="${f.color}">${meta}</text>
@@ -286,10 +304,12 @@ ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id),
     })
     .join('\n')
   const hidden = state.list.filter(f => f.slot >= slots && f.leftAt === undefined).length
-  const more = hidden > 0 ? `<text class="name" x="2" y="${GROUND + 12}" fill="#9a9a9a">+${hidden}</text>` : ''
+  const more = hidden > 0 ? `<g transform="scale(${SCALE})"><text class="name" x="2" y="${GROUND + 12}" fill="#9a9a9a">+${hidden}</text></g>` : ''
 
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${HEIGHT}" width="${CANVAS}" height="${Math.round(HEIGHT * SCALE)}" preserveAspectRatio="xMinYMid slice">
+  // No viewBox: the drawing's units are the band's CSS pixels, so `100%` is the
+  // band's real width; each part is drawn in units inside a scale(SCALE) group.
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${CANVAS}" height="${Math.round(HEIGHT * SCALE)}">
 <style>
 /* Squash and stretch about the feet (0, 0), not the group's box: that box
    holds the speed lines, swinging feet and bubble, so its centre wanders and a
@@ -310,6 +330,7 @@ ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id),
 .dots { font: 700 10px system-ui, sans-serif; fill: #555555; }
 .bubble { animation: pop 0.2s ease-out both; }
 .tool { font: 500 9px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #444444; }
+.crew, .flagpos { transform-box: view-box; }
 .advance { animation: advance ${ADVANCE_S}s cubic-bezier(0.2, 0.8, 0.3, 1) both; }
 .shift { animation: shift ${ADVANCE_S}s cubic-bezier(0.3, 0.7, 0.3, 1) both; }
 .steps { font: 700 9px system-ui, sans-serif; fill: #7a7a7a; font-variant-numeric: tabular-nums; }
@@ -352,18 +373,18 @@ ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id),
 @keyframes say { 0% { opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes pop { from { opacity: 0; } to { opacity: 1; } }
 @keyframes wave { from { transform: skewY(-6deg) scaleX(0.94); } to { transform: skewY(5deg) scaleX(1); } }
-@keyframes advance { from { transform: translateX(${glideFrom.toFixed(1)}px); } to { transform: translateX(0); } }
-@keyframes shift { from { transform: translateX(${shiftFrom.toFixed(1)}px); } to { transform: translateX(0); } }
+@keyframes advance { from { transform: translateX(${crewFrom}); } to { transform: translateX(${crewNow}); } }
+@keyframes shift { from { transform: translateX(${shiftUnits.toFixed(1)}px); } to { transform: translateX(0); } }
 @keyframes enter { from { opacity: 0; transform: scale(0.2); } to { opacity: 1; transform: scale(1); } }
 @keyframes exit { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(-14px) scale(0.4); } }
 @media (prefers-reduced-motion: reduce) { .jump, .speed, .footA, .footB, .enter, .exit, .sweat, .pant, .trip, .stars, .cheer, .confetti, .say, .bubble, .advance, .shift, .wave { animation: none; } }
 </style>
-${flag}
+${flag ? `<g class="flagpos" style="transform: translateX(calc(100% - ${FLAG_EDGE_PX.toFixed(1)}px))"><g transform="scale(${SCALE})">${flag}</g></g>` : ''}
 ${more}
-<g class="shift" style="animation-delay: -${shiftAge.toFixed(3)}s"><g class="advance" style="animation-delay: -${glideAge.toFixed(3)}s">
+<g class="crew advance" style="transform: translateX(${crewNow}); animation-delay: -${glideAge.toFixed(3)}s"><g transform="scale(${SCALE})"><g class="shift" style="animation-delay: -${shiftAge.toFixed(3)}s">
 ${followers}
-<g transform="translate(${runnerX} ${GROUND})">${body(RUNNER_COLOR, true, mood, jumpDelay(runnerX), acts.find(r => r.target === RUNNER), nowMs, says)}</g>
-</g></g>
+<g transform="translate(0 ${GROUND})">${body(RUNNER_COLOR, true, mood, jumpDelay(runnerX), acts.find(r => r.target === RUNNER), nowMs, says)}</g>
+</g></g></g>
 </svg>`
 }
 
@@ -916,10 +937,11 @@ export const register: Register = on => {
         nowMs = Math.max(st?.at ?? 0, state.stamp)
       }
       const slots = capacity(cols, PX_PER_CELL, STEP * SCALE, 140)
-      // The flag at the band's right end, just inside it; never nearer than a
-      // short run past the most slots the band holds.
+      // Where the flag stands, as the band's width in columns suggests: only an
+      // estimate (the drawing anchors the flag to the real right edge), for the
+      // hops' ripple and the room the runner's bubble has.
       const view = (cols * PX_PER_CELL) / SCALE
-      const flagX = Math.round(Math.max(view - FLAG_EDGE, START_X + slots * STEP + 60 + FLAG_NEAR))
+      const flagX = Math.round(Math.max(view - FLAG_EDGE_PX / SCALE, START_X + slots * STEP + 60 + FLAG_NEAR))
       const names = running.map(f => f.label).join(', ')
       return (
         <Box flexDirection="column">
