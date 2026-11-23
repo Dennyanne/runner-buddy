@@ -12,8 +12,12 @@ export type Follower = {
   /** The model it runs on, as the engine resolved it (`claude-haiku-5-5`); absent until known. */
   model?: string
 }
-/** The followers, and when the list last changed (keeps redrawn SVG animations in phase). */
-export type Crew = { list: Follower[]; stamp: number }
+/**
+ * The followers, and when the list last changed (keeps redrawn SVG animations
+ * in phase). `fromRoom` is how many slots they took before the last change in
+ * that, at `roomAt`, so the runner glides aside (or back) from there.
+ */
+export type Crew = { list: Follower[]; stamp: number; fromRoom?: number; roomAt?: number }
 /** Summed over every turn: `input` is new input, cache writes and cache reads together; `cacheRead` is the cache's part of it. */
 export type Tokens = { input: number; output: number; cacheRead: number }
 export type Stats = {

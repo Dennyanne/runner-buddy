@@ -3,6 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Crew, Doing, Reaction, Stats, TodoItem, Todos } from '../types'
 import { applyTodoCall, remainingShare } from '../hooks/todos'
 import { planOf } from '../hooks/plan'
+import { roomOf, withList } from '../hooks/room'
 import { toolLabel } from '../hooks/tool-label'
 
 const NOW = 100_000
@@ -728,17 +729,17 @@ test('desktop: the flag stands still and the runner moves toward it by the share
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE, fromShare: 0.6, changedAt: NOW - 250 })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
-  // Start at 34 + 6 × 72 = 466; flag fixed at 466 + 300 + 26 = 792; runner at 466 + 0.6 × 300 = 646,
-  // gliding from 466 + 0.4 × 300 = 586, i.e. 60 units back.
+  // No followers: start at 34. Flag fixed past six slots: 34 + 6 × 72 + 300 + 26 = 792, so the way
+  // runs 34 → 766. Runner at 34 + 0.6 × 732 = 473, gliding from 34 + 0.4 × 732 = 327, 146 back.
   expect(source).toContain('<g class="flag" transform="translate(792.0 45)">')
-  expect(source).toContain('<g transform="translate(646 48)">')
+  expect(source).toContain('<g transform="translate(473 48)">')
   expect(source).toContain('<g class="advance" style="animation-delay: -0.250s">')
-  expect(source).toContain('@keyframes advance { from { transform: translateX(-60.0px); }')
+  expect(source).toContain('@keyframes advance { from { transform: translateX(-146.0px); }')
   expect(source).toContain('>3/5</text>')
   expect(source.includes('cloth wave')).toBe(false)
   expect(source.indexOf('class="flag"')).toBeLessThan(source.indexOf('class="obstacles"')) // behind the obstacles
-  // The obstacles keep their places from the start, not from the runner.
-  expect(source).toContain('transform="translate(526.0 48)"')
+  // The obstacles keep their places from the fixed anchor, not from the runner.
+  expect(source).toContain('transform="translate(94.0 48)"')
   expect(await units(ui)).toContain('할 일 3/5')
   await ui.unmount()
 })
@@ -758,8 +759,8 @@ test('desktop: when a finished list is taken down the runner walks back to its s
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: [], fromShare: 0, changedAt: NOW - 100 })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
-  expect(source).toContain('<g transform="translate(466 48)">')
-  expect(source).toContain('@keyframes advance { from { transform: translateX(300.0px); }')
+  expect(source).toContain('<g transform="translate(34 48)">')
+  expect(source).toContain('@keyframes advance { from { transform: translateX(732.0px); }')
   expect(source.includes('class="flag"')).toBe(false)
   await ui.unmount()
 })
@@ -769,7 +770,7 @@ test('with no todo list there is no flag and no count', async ($, on) => {
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
   expect(source.includes('class="flag"')).toBe(false)
-  expect(source).toContain('<g transform="translate(466 48)">') // at its start
+  expect(source).toContain('<g transform="translate(34 48)">') // at its start, far left
   expect((await allText(ui)).includes('할 일')).toBe(false)
   await ui.unmount()
 })
@@ -778,10 +779,10 @@ test('terminal: the runner walks toward a fixed |> flag by the share done', asyn
   seed(on, EMPTY, STATS, 0, NOW, [], [], { items: FIVE, fromShare: 0.4, changedAt: NOW })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   const [air, floor] = await units(ui)
-  // Start at column 56; the span is min(40, 139 − 56 − 10) = 40; flag at 56 + 40 + 6 = 102;
-  // runner at 56 + 0.6 × 40 = 80.
+  // No followers: start at column 2. Six slots end at 56; the span is min(40, 139 − 56 − 10) = 40, so the
+  // way runs 2 → 96 and the flag stands at 102; runner at 2 + 0.6 × 94 = 58.
   expect(air?.indexOf('|>')).toBe(102)
-  expect(Math.max(air?.indexOf('(^^)') ?? -1, floor?.indexOf('(^^)') ?? -1)).toBe(80)
+  expect(Math.max(air?.indexOf('(^^)') ?? -1, floor?.indexOf('(^^)') ?? -1)).toBe(58)
   expect(await units(ui)).toContain('할 일 3/5')
   await ui.unmount()
 })
@@ -819,11 +820,11 @@ test("the app's own bookkeeping calls (task list, wrap-up) put up no speech bubb
 
 test("desktop: the runner's bubble is cut to the room before the flag, and left out at the flag", async ($, on) => {
   const doingNow = [{ target: 'runner', text: '$ claude plugin test --verbose', at: NOW - 100, seq: 1 }]
-  // 4 of 5 done: runner at 466 + 240 = 706, flag at 792; room ((792 − 706 − 4) / 1.1 − 25) / 5.5 = 9 letters.
+  // 4 of 5 done: runner at 34 + 0.8 × 732 = 620, flag at 792; room ((792 − 620 − 4) / 1.1 − 25) / 5.5 = 23 letters.
   const four = FIVE.map((i, n) => ({ ...i, status: n < 4 ? ('completed' as const) : ('in_progress' as const) }))
   seed(on, EMPTY, STATS, 7, NOW, [], doingNow, { items: four, fromShare: 0.2, changedAt: NOW - 5000 })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await svgSource(ui)).toContain('>$ claude…</text>')
+  expect(await svgSource(ui)).toContain('>$ claude plugin test -…</text>')
   await ui.unmount()
 })
 
@@ -852,4 +853,49 @@ test('desktop: the flag stands far off, small on a faint hill behind the obstacl
   expect(source).toContain('<g transform="translate(0 -13) scale(0.62)" opacity="0.8">')
   expect(source.indexOf('class="hill"')).toBeLessThan(source.indexOf('class="obstacles"'))
   await ui.unmount()
+})
+
+test('desktop: the runner starts at the left, a slot farther right for each follower slot in use', async ($, on) => {
+  seed(on, CREW) // three followers, slots 0 to 2
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  // 34 + 3 × 72 = 250; its followers behind it at 178, 106 and 34.
+  expect(source).toContain('<g transform="translate(250 48)">')
+  expect(source).toContain('<g transform="translate(178 48)">')
+  expect(source).toContain('<g transform="translate(106 48)">')
+  expect(source).toContain('<g transform="translate(34 48)">')
+  await ui.unmount()
+})
+
+test('desktop: when a follower joins, the crew glides right to make room for it', async ($, on) => {
+  // The room went from two slots to three, 0.2 s ago.
+  seed(on, { ...CREW, fromRoom: 2, roomAt: NOW - 200 })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source).toContain('<g class="shift" style="animation-delay: -0.200s">')
+  expect(source).toContain('@keyframes shift { from { transform: translateX(-72.0px); }')
+  await ui.unmount()
+})
+
+test('terminal: the runner starts at the left and moves aside for its followers', async ($, on) => {
+  seed(on, CREW)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const [air, floor] = await units(ui)
+  // Start at column 2 + 3 × 9 = 29.
+  expect(Math.max(air?.indexOf('(^^)') ?? -1, floor?.indexOf('(^^)') ?? -1)).toBe(29)
+  await ui.unmount()
+})
+
+test('the crew remembers its room when a follower joins or leaves, and only then', () => {
+  const one: Crew = { list: [CREW.list[0]!], stamp: 1 }
+  const joined = withList(one, [CREW.list[0]!, CREW.list[1]!], 50)
+  expect(joined).toEqual({ list: [CREW.list[0], CREW.list[1]], stamp: 50, fromRoom: 1, roomAt: 50 })
+  // A follower fading out keeps its slot: no change in room, the last shift is kept.
+  const fading = withList(joined, [CREW.list[0]!, { ...CREW.list[1]!, leftAt: 60 }], 60)
+  expect(fading.fromRoom).toBe(1)
+  expect(fading.roomAt).toBe(50)
+  // Once it is gone the crew steps back.
+  expect(withList(fading, [CREW.list[0]!], 600)).toMatchObject({ fromRoom: 2, roomAt: 600 })
+  expect(roomOf([])).toBe(0)
+  expect(roomOf([CREW.list[2]!])).toBe(3) // a gap left by others still counts up to the farthest
 })
