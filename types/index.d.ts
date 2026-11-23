@@ -36,8 +36,11 @@ export type ReactionKind = 'trip' | 'finish' | 'stop'
 /** `target` is `runner` or a follower's agent id; `at` is when it began, `$.clock.now()` ms. */
 export type Reaction = { target: string; kind: ReactionKind; at: number }
 
+/** A tool call a character is running: `target` as for a reaction, `text` its label, `seq` the call's own number. */
+export type Doing = { target: string; text: string; at: number; seq: number }
+
 declare module 'claude-code' {
   interface PluginState {
-    'runner-buddy': { frame: Frame; crew: Crew; tokens: Tokens; stats: Stats | null; reactions: Reaction[] }
+    'runner-buddy': { frame: Frame; crew: Crew; tokens: Tokens; stats: Stats | null; reactions: Reaction[]; doing: Doing[] }
   }
 }

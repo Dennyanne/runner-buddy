@@ -1,13 +1,16 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Crew, Follower, Reaction, ReactionKind, Stats, Tokens } from '../types'
+import type { Crew, Doing, Follower, Reaction, ReactionKind, Stats, Tokens } from '../types'
+
+import { toolLabel } from './tool-label'
 
 const frame = atom({ plugin: 'runner-buddy', key: 'frame' } as const, 0)
 const crew = atom({ plugin: 'runner-buddy', key: 'crew' } as const, { list: [], stamp: 0 } as Crew)
 const tokens = atom({ plugin: 'runner-buddy', key: 'tokens' } as const, { input: 0, output: 0, cacheRead: 0 } as Tokens)
 const stats = atom({ plugin: 'runner-buddy', key: 'stats' } as const, null as Stats | null)
 const reactions = atom({ plugin: 'runner-buddy', key: 'reactions' } as const, [] as Reaction[])
+const doing = atom({ plugin: 'runner-buddy', key: 'doing' } as const, [] as Doing[])
 
 const TICK_MS = 120
 const STATS_EVERY = 8 // ticks between usage refreshes (about once a second)
@@ -15,6 +18,8 @@ const EXIT_MS = 450 // how long a finished follower takes to fade out
 // How long each reaction plays; the band stays up for it after a turn ends.
 const REACTION_MS: Record<ReactionKind, number> = { trip: 1200, finish: 2200, stop: 1500 }
 const RUNNER = 'runner' // a reaction's target when it is the runner's
+const DOING_MIN_MS = 1000 // a tool's label stays up at least this long, so a quick Read does not flicker
+const BUBBLE_CHARS = 24 // the runner's speech bubble, in characters
 const MAX_SLOTS = 6
 const RUNNER_COLOR = '#D97757'
 const PALETTE = ['#4F9DDE', '#4CB782', '#B57EDC', '#E0698A', '#3FB8AF', '#E8A33D']
@@ -192,8 +197,17 @@ const CONFETTI_COLORS = ['#E5484D', '#F5C842', '#4F9DDE', '#4CB782', '#B57EDC', 
 
 // A character's body at (0, 0) on its feet: jumping, or playing its reaction,
 // each phased from when the reaction began so a redraw resumes it.
-function body(color: string, isRunner: boolean, mood: Mood, jumpDelayS: number, act: Reaction | undefined, nowMs: number): string {
-  const jumping = () => `<g class="jump" style="animation-delay: ${jumpDelayS.toFixed(3)}s">${blob(color, isRunner, mood)}</g>`
+// The runner's speech bubble for the tool it is running, beside its head on the
+// right (above would leave the band at the top of a jump), tail toward its mouth.
+function bubble(text: string): string {
+  const label = shorten(text, BUBBLE_CHARS)
+  const width = 9 + label.length * 5.5
+  return `<g class="bubble" transform="translate(16 -27)"><path d="M 0.5 6 L -4 9.5 L 0.5 10 Z" fill="#ffffff" stroke="#cfcfcf" stroke-width="0.8"/><rect x="0" y="0" width="${width.toFixed(1)}" height="13" rx="6.5" fill="#ffffff" stroke="#cfcfcf" stroke-width="0.8"/><text class="tool" x="4.5" y="9.3">${escapeXml(label)}</text></g>`
+}
+
+function body(color: string, isRunner: boolean, mood: Mood, jumpDelayS: number, act: Reaction | undefined, nowMs: number, says?: string): string {
+  const jumping = () =>
+    `<g class="jump" style="animation-delay: ${jumpDelayS.toFixed(3)}s">${blob(color, isRunner, mood)}${says ? bubble(says) : ''}</g>`
   if (!act) return jumping()
   const age = `-${Math.max(0, (nowMs - act.at) / 1000).toFixed(3)}s`
   if (act.kind === 'trip') {
@@ -215,7 +229,7 @@ function body(color: string, isRunner: boolean, mood: Mood, jumpDelayS: number, 
 
 // Every animation is phased from `nowMs`, the moment of drawing, so a redrawn
 // SVG (any redraw of the band remounts it) resumes exactly where it was.
-function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh', acts: Reaction[] = []): string {
+function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh', acts: Reaction[] = [], busy: Doing[] = []): string {
   const t = nowMs / 1000
   const runnerX = 34 + slots * STEP
   const width = Math.ceil(CANVAS / SCALE)
@@ -235,7 +249,8 @@ function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh
           ? `class="enter" style="animation-delay: -${Math.max(0, ageS).toFixed(3)}s"`
           : `class="exit" style="animation-delay: -${Math.max(0, (nowMs - f.leftAt) / 1000).toFixed(3)}s"`
       const label = escapeXml(shorten(f.label, 9))
-      const meta = escapeXml(followerMeta(f, nowMs, 11))
+      const tool = busy.find(d => d.target === f.id)
+      const meta = escapeXml(tool ? shorten(tool.text, 11) : followerMeta(f, nowMs, 11))
       return `<g transform="translate(${x} ${GROUND})"><g ${life}>
 ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id), nowMs)}
 <text class="name" x="0" y="12" text-anchor="middle" fill="${f.color}">${label}</text>
@@ -276,6 +291,8 @@ ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id),
 .c1 { animation-name: c1; } .c2 { animation-name: c2; } .c3 { animation-name: c3; } .c4 { animation-name: c4; }
 .say { animation: say ${REACTION_MS.stop / 1000}s ease-out both; }
 .dots { font: 700 10px system-ui, sans-serif; fill: #555555; }
+.bubble { animation: pop 0.2s ease-out both; }
+.tool { font: 500 9px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #444444; }
 .enter { transform-box: view-box; transform-origin: 0 0; animation: enter 0.5s cubic-bezier(0.3, 1.5, 0.5, 1) both; }
 .exit { transform-box: view-box; transform-origin: 0 0; animation: exit ${EXIT_MS / 1000}s ease-in both; }
 .name { font: 600 13px system-ui, sans-serif; }
@@ -313,14 +330,15 @@ ${body(f.color, false, 'fresh', jumpDelay(x), acts.find(r => r.target === f.id),
 @keyframes c3 { from { opacity: 1; transform: translate(0, 0) rotate(0deg); } to { opacity: 0; transform: translate(-9px, -17px) rotate(160deg); } }
 @keyframes c4 { from { opacity: 1; transform: translate(0, 0) rotate(0deg); } to { opacity: 0; transform: translate(9px, -17px) rotate(-160deg); } }
 @keyframes say { 0% { opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes pop { from { opacity: 0; } to { opacity: 1; } }
 @keyframes enter { from { opacity: 0; transform: scale(0.2); } to { opacity: 1; transform: scale(1); } }
 @keyframes exit { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(-14px) scale(0.4); } }
-@media (prefers-reduced-motion: reduce) { .obstacles, .jump, .speed, .footA, .footB, .enter, .exit, .sweat, .pant, .trip, .stars, .cheer, .confetti, .say { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .obstacles, .jump, .speed, .footA, .footB, .enter, .exit, .sweat, .pant, .trip, .stars, .cheer, .confetti, .say, .bubble { animation: none; } }
 </style>
 <g class="obstacles" style="animation-delay: ${slideDelay.toFixed(3)}s">${obstacles}</g>
 ${followers}
 ${more}
-<g transform="translate(${runnerX} ${GROUND})">${body(RUNNER_COLOR, true, mood, jumpDelay(runnerX), acts.find(r => r.target === RUNNER), nowMs)}</g>
+<g transform="translate(${runnerX} ${GROUND})">${body(RUNNER_COLOR, true, mood, jumpDelay(runnerX), acts.find(r => r.target === RUNNER), nowMs, busy.find(d => d.target === RUNNER)?.text)}</g>
 </svg>`
 }
 
@@ -345,7 +363,7 @@ function rowParts(cells: Cell[]): Part[] {
   return parts
 }
 
-function terminalScene(state: Crew, n: number, cols: number, nowMs: number | null, mood: Mood = 'fresh', acts: Reaction[] = []): Part[][] {
+function terminalScene(state: Crew, n: number, cols: number, nowMs: number | null, mood: Mood = 'fresh', acts: Reaction[] = [], busy: Doing[] = []): Part[][] {
   const width = Math.max(30, cols - 1)
   const slots = capacity(cols, 1, T_STEP, 24)
   const runnerCol = 2 + slots * T_STEP
@@ -397,9 +415,12 @@ function terminalScene(state: Crew, n: number, cols: number, nowMs: number | nul
     draw(col, FOLLOWER_SPRITE, f.color, acts.find(r => r.target === f.id))
     put(names, col, shorten(f.label, T_STEP - 1), f.color)
     // "h 0:42": the model's initial keeps it inside the slot.
-    put(metas, col, followerMeta({ ...f, model: shortModel(f.model)?.[0] }, nowMs, T_STEP - 1), f.color)
+    const tool = busy.find(d => d.target === f.id)
+    put(metas, col, tool ? shorten(tool.text, T_STEP - 1) : followerMeta({ ...f, model: shortModel(f.model)?.[0] }, nowMs, T_STEP - 1), f.color)
   }
   draw(runnerCol, RUNNER_SPRITES[mood], RUNNER_COLOR, acts.find(r => r.target === RUNNER))
+  const says = busy.find(d => d.target === RUNNER)
+  if (says) put(names, runnerCol, shorten(says.text, Math.max(4, width - runnerCol)), RUNNER_COLOR)
   const rows = [air, floor, names]
   if (metas.some(c => c.ch !== ' ')) rows.push(metas)
   return rows.map(rowParts)
@@ -591,6 +612,29 @@ async function prune($: EngineInterface) {
   )
 }
 
+let callSeq = 0
+
+// Shows `text` as what `target` is doing; returns when it began.
+async function startDoing($: EngineInterface, target: string, text: string, seq: number): Promise<number> {
+  const at = await $.clock.now()
+  await update($, doing, list => [...list.filter(d => d.target !== target), { target, text, at, seq }])
+  return at
+}
+
+// Clears it once the call is done, but not before it has shown for a moment,
+// and only if no later call of that character has taken its place.
+async function endDoing($: EngineInterface, target: string, seq: number, at: number) {
+  const clear = () => update($, doing, list => (list.some(d => d.seq === seq) ? list.filter(d => d.seq !== seq) : list))
+  const shown = (await $.clock.now()) - at
+  if (shown >= DOING_MIN_MS) {
+    await clear()
+    return
+  }
+  $.clock.after(DOING_MIN_MS - shown, () => {
+    void clear().catch(() => undefined)
+  })
+}
+
 // Plays `kind` on `target` (the runner or a follower), replacing one it was
 // playing, and takes it off once its time is up.
 async function react($: EngineInterface, target: string, kind: ReactionKind) {
@@ -625,15 +669,24 @@ export const register: Register = on => {
     return result
   }).catch(($, e, next) => next(e)) // a drawing glitch must never block a spawn
 
-  // A tool call that fails trips the character whose loop made it.
+  // While a tool call runs, its character shows what it is; one that fails
+  // trips that character. Both are decoration: the call and its result pass
+  // through untouched, whatever happens to them.
   on('tool.call', async ($, e, next) => {
+    const target = e.agentId ?? RUNNER
+    const seq = ++callSeq
+    let startedAt: number | null = null
+    try {
+      startedAt = await startDoing($, target, toolLabel(e.tool, e as unknown as Record<string, unknown>), seq)
+    } catch {
+      // No label this time.
+    }
     const result = await next(e)
-    if (result.isError === true) {
-      try {
-        await react($, e.agentId ?? RUNNER, 'trip')
-      } catch {
-        // A reaction is decoration: never let it touch the call's result.
-      }
+    try {
+      if (startedAt !== null) await endDoing($, target, seq, startedAt)
+      if (result.isError === true) await react($, target, 'trip')
+    } catch {
+      // A reaction is decoration: never let it touch the call's result.
     }
     return result
   }).catch(($, e, next) => next(e))
@@ -663,6 +716,8 @@ export const register: Register = on => {
       }))
     }
     await refreshStats($)
+    const done = e.agentId ?? RUNNER
+    await update($, doing, list => (list.some(d => d.target === done) ? list.filter(d => d.target !== done) : list))
     if (e.agentId) {
       await leave($, e.agentId)
     } else {
@@ -681,6 +736,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const state = await read($, crew)
     const acts = (await read($, reactions)) ?? [] // none stored yet reads as no reactions
+    const busy = (await read($, doing)) ?? []
     // Shown while Claude works, while background subagents still run, and while
     // a reaction plays out (the cheer after a turn ends).
     if ((!e.props.isWorking && state.list.length === 0 && acts.length === 0) || e.props.hasSurvey) return next(e)
@@ -721,7 +777,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           <Svg
-            source={sceneSvg(state, slots, nowMs, moodOf(st), acts)}
+            source={sceneSvg(state, slots, nowMs, moodOf(st), acts, busy)}
             height={Math.round(HEIGHT * SCALE)}
             alt={
               running.length > 0
@@ -735,7 +791,7 @@ export const register: Register = on => {
     }
 
     const n = await read($, frame)
-    const rows = terminalScene(state, n, cols, st?.at ?? null, moodOf(st), acts)
+    const rows = terminalScene(state, n, cols, st?.at ?? null, moodOf(st), acts, busy)
     return (
       <Box flexDirection="column">
         {/* Each scene row is one line cut to the band, never wrapped: a wrap would
