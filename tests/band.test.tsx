@@ -72,7 +72,7 @@ async function svgSource(ui: { find: (q: { type: 'Svg' }) => Promise<{ props: Re
   return String((await ui.find({ type: 'Svg' }))?.props.source)
 }
 
-test('desktop: runner and named followers jump obstacles, full width, fixed height', async ($, on) => {
+test('desktop: runner and named followers hop along an empty floor, full width, fixed height', async ($, on) => {
   seed(on, CREW)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const svg = await ui.find({ type: 'Svg' })
@@ -81,9 +81,7 @@ test('desktop: runner and named followers jump obstacles, full width, fixed heig
   expect(source.includes('#D97757')).toBe(true) // the runner
   expect(source.includes('>Explore<')).toBe(true)
   expect(source.includes('>code-rev…<')).toBe(true)
-  for (const object of ['bug', 'mushroom', 'coffee', 'braces', 'flower', 'cactus']) {
-    expect(source.includes(`class="obstacle ${object}"`)).toBe(true)
-  }
+  expect(source.includes('class="obstacle')).toBe(false) // nothing on the floor
   expect(source.match(/class="jump"/g)?.length).toBe(4) // three followers and the runner
   expect(source.includes('class="dot"')).toBe(false) // no more dots to eat
   expect(source.includes('class="ground"')).toBe(false)
@@ -122,20 +120,18 @@ test('desktop: a new follower pops in, an old one is already in, a finished one 
 
 test('desktop: every redraw resumes the loops where the clock says they are', async ($, on) => {
   // Drawn at 1.35 s, then again at 7.0 s with nothing else changed: the
-  // objects and the jump pick up from each moment, never from the crew's stamp.
+  // hop picks up from each moment, never from the crew's stamp.
   seed(on, { list: [], stamp: 0 }, STATS, 7, 1_350)
   const first = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const a = await svgSource(first)
-  expect(a).toContain('class="obstacles" style="animation-delay: -1.350s"')
   expect(a).toMatch(/class="jump" style="animation-delay: -0\.450s"/)
   await first.unmount()
 })
 
 test('desktop: a later redraw is phased from its own moment', async ($, on) => {
-  seed(on, { list: [], stamp: 0 }, STATS, 7, 7_000) // 7.0 s: 1.6 s into the 5.4 s loop
+  seed(on, { list: [], stamp: 0 }, STATS, 7, 7_000) // 7.0 s: 0.7 s into the 0.9 s hop
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
-  expect(source).toContain('class="obstacles" style="animation-delay: -1.600s"')
   expect(source).toMatch(/class="jump" style="animation-delay: -0\.700s"/)
   await ui.unmount()
 })
@@ -143,7 +139,7 @@ test('desktop: a later redraw is phased from its own moment', async ($, on) => {
 test('desktop: if the clock is refused while drawing, the latest reading stands in', async ($, on) => {
   seed(on, { list: [], stamp: 500 }, { ...STATS, at: 1_350 }, 7, null)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await svgSource(ui)).toContain('class="obstacles" style="animation-delay: -1.350s"')
+  expect(await svgSource(ui)).toMatch(/class="jump" style="animation-delay: -0\.450s"/)
   await ui.unmount()
 })
 
@@ -204,7 +200,7 @@ test('before the first reading the context shows a placeholder', async ($, on) =
   await ui.unmount()
 })
 
-test('terminal: followers in their colours, names under them, obstacles on the floor', async ($, on) => {
+test('terminal: followers in their colours, names under them, nothing on the floor', async ($, on) => {
   seed(on, CREW)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   const texts = await ui.findAll({ type: 'Text' })
@@ -214,15 +210,15 @@ test('terminal: followers in their colours, names under them, obstacles on the f
   expect(all).toContain('(^^)')
   expect(all).toContain('(oo)')
   expect(all).toContain('Explore')
-  // The floor carries the small objects, each its own colour and letter.
-  const objects = texts.filter(t => ['o', 'T', 'u', '{', '*', 'Y'].includes(t.text) && t.props.color !== undefined)
-  expect(new Set(objects.map(t => t.text)).size).toBeGreaterThanOrEqual(4)
+  // The floor holds only the characters on it.
+  const [, floor] = await units(ui)
+  expect((floor ?? '').replace(/\((?:\^\^|oo)\)/g, '').trim()).toBe('')
   await ui.unmount()
 })
 
-test('terminal: a character jumps while an obstacle passes under it', async ($, on) => {
-  // Runner at column 2 + 6 * 9 = 56 with 140 columns; at frame n an obstacle
-  // sits at every x with (x + n) % 14 === 0, so frame 10 puts one at x = 60.
+test('terminal: a character hops while an unseen bump passes under it', async ($, on) => {
+  // Runner at column 2 with no followers; at frame n a bump sits at every x
+  // with (x + n) % 14 === 0, so frame 10 puts one at x = 4, under it.
   seed(on, EMPTY, STATS, 10)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   const [air, floor] = await units(ui)
@@ -729,17 +725,15 @@ test('desktop: the flag stands still and the runner moves toward it by the share
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE, fromShare: 0.6, changedAt: NOW - 250 })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
-  // No followers: start at 34. Flag fixed past six slots: 34 + 6 × 72 + 300 + 26 = 792, so the way
-  // runs 34 → 766. Runner at 34 + 0.6 × 732 = 473, gliding from 34 + 0.4 × 732 = 327, 146 back.
-  expect(source).toContain('<g class="flag" transform="translate(792.0 45)">')
-  expect(source).toContain('<g transform="translate(473 48)">')
+  // 140 columns show 140 × 7.5 / 0.7 = 1500 units; the flag stands 18 in, at 1482, so the way runs
+  // 34 → 1456. Runner at 34 + 0.6 × 1422 = 887, gliding from 34 + 0.4 × 1422 = 603, 284 back.
+  expect(source).toContain('<g class="flag" transform="translate(1482.0 45)">')
+  expect(source).toContain('<g transform="translate(887 48)">')
   expect(source).toContain('<g class="advance" style="animation-delay: -0.250s">')
-  expect(source).toContain('@keyframes advance { from { transform: translateX(-146.0px); }')
+  expect(source).toContain('@keyframes advance { from { transform: translateX(-284.0px); }')
   expect(source).toContain('>3/5</text>')
   expect(source.includes('cloth wave')).toBe(false)
-  expect(source.indexOf('class="flag"')).toBeLessThan(source.indexOf('class="obstacles"')) // behind the obstacles
-  // The obstacles keep their places from the fixed anchor, not from the runner.
-  expect(source).toContain('transform="translate(94.0 48)"')
+  expect(source.indexOf('class="flag"')).toBeLessThan(source.indexOf('class="shift"')) // behind the crew
   expect(await units(ui)).toContain('할 일 3/5')
   await ui.unmount()
 })
@@ -748,8 +742,8 @@ test('desktop: once every step is done the runner reaches the flag, which waves,
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE.map(i => ({ ...i, status: 'completed' as const })), fromShare: 0.2, changedAt: NOW })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
-  expect(source).toContain('<g class="flag" transform="translate(792.0 45)">')
-  expect(source).toContain('<g transform="translate(766 48)">')
+  expect(source).toContain('<g class="flag" transform="translate(1482.0 45)">')
+  expect(source).toContain('<g transform="translate(1456 48)">')
   expect(source).toContain('cloth wave')
   expect((await ui.find({ type: 'Text', text: /^5\/5$/ }))?.props.color).toBe('#4CB782')
   await ui.unmount()
@@ -760,7 +754,7 @@ test('desktop: when a finished list is taken down the runner walks back to its s
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
   expect(source).toContain('<g transform="translate(34 48)">')
-  expect(source).toContain('@keyframes advance { from { transform: translateX(732.0px); }')
+  expect(source).toContain('@keyframes advance { from { transform: translateX(1422.0px); }')
   expect(source.includes('class="flag"')).toBe(false)
   await ui.unmount()
 })
@@ -779,10 +773,10 @@ test('terminal: the runner walks toward a fixed |> flag by the share done', asyn
   seed(on, EMPTY, STATS, 0, NOW, [], [], { items: FIVE, fromShare: 0.4, changedAt: NOW })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   const [air, floor] = await units(ui)
-  // No followers: start at column 2. Six slots end at 56; the span is min(40, 139 − 56 − 10) = 40, so the
-  // way runs 2 → 96 and the flag stands at 102; runner at 2 + 0.6 × 94 = 58.
-  expect(air?.indexOf('|>')).toBe(102)
-  expect(Math.max(air?.indexOf('(^^)') ?? -1, floor?.indexOf('(^^)') ?? -1)).toBe(58)
+  // No followers: start at column 2. The band is 139 wide, so the flag stands at its right end, 136,
+  // and the way runs 2 → 130; runner at 2 + 0.6 × 128 = 79.
+  expect(air?.indexOf('|>')).toBe(136)
+  expect(Math.max(air?.indexOf('(^^)') ?? -1, floor?.indexOf('(^^)') ?? -1)).toBe(79)
   expect(await units(ui)).toContain('할 일 3/5')
   await ui.unmount()
 })
@@ -820,11 +814,12 @@ test("the app's own bookkeeping calls (task list, wrap-up) put up no speech bubb
 
 test("desktop: the runner's bubble is cut to the room before the flag, and left out at the flag", async ($, on) => {
   const doingNow = [{ target: 'runner', text: '$ claude plugin test --verbose', at: NOW - 100, seq: 1 }]
-  // 4 of 5 done: runner at 34 + 0.8 × 732 = 620, flag at 792; room ((792 − 620 − 4) / 1.1 − 25) / 5.5 = 23 letters.
-  const four = FIVE.map((i, n) => ({ ...i, status: n < 4 ? ('completed' as const) : ('in_progress' as const) }))
-  seed(on, EMPTY, STATS, 7, NOW, [], doingNow, { items: four, fromShare: 0.2, changedAt: NOW - 5000 })
+  // 29 of 30 done: runner at 34 + (29 / 30) × 1422 = 1409, flag at 1482;
+  // room ((1482 − 1409 − 4) / 1.1 − 25) / 5.5 = 6 letters.
+  const most = Array.from({ length: 30 }, (_, n) => step(`s${n}`, n < 29 ? 'completed' : 'in_progress'))
+  seed(on, EMPTY, STATS, 7, NOW, [], doingNow, { items: most, fromShare: 0.1, changedAt: NOW - 5000 })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await svgSource(ui)).toContain('>$ claude plugin test -…</text>')
+  expect(await svgSource(ui)).toContain('>$ cla…</text>')
   await ui.unmount()
 })
 
@@ -845,13 +840,13 @@ test('desktop: the jump squashes about the feet, so a landing does not shove the
   await ui.unmount()
 })
 
-test('desktop: the flag stands far off, small on a faint hill behind the obstacles, so it can stand still while they slide', async ($, on) => {
+test('desktop: the flag stands small on a faint hill, behind the crew', async ($, on) => {
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE, fromShare: 0.4, changedAt: NOW - 5000 })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
   expect(source).toContain('<path class="hill"')
   expect(source).toContain('<g transform="translate(0 -13) scale(0.62)" opacity="0.8">')
-  expect(source.indexOf('class="hill"')).toBeLessThan(source.indexOf('class="obstacles"'))
+  expect(source.indexOf('class="hill"')).toBeLessThan(source.indexOf('class="shift"'))
   await ui.unmount()
 })
 
@@ -898,4 +893,12 @@ test('the crew remembers its room when a follower joins or leaves, and only then
   expect(withList(fading, [CREW.list[0]!], 600)).toMatchObject({ fromRoom: 2, roomAt: 600 })
   expect(roomOf([])).toBe(0)
   expect(roomOf([CREW.list[2]!])).toBe(3) // a gap left by others still counts up to the farthest
+})
+
+test('desktop: the flag stands at the right end of a narrower band too', async ($, on) => {
+  seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE, fromShare: 0.4, changedAt: NOW - 5000 })
+  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 100 }, surface: 'desktop' })
+  // 100 columns show 100 × 7.5 / 0.7 ≈ 1071 units; the flag stands 18 in.
+  expect(await svgSource(ui)).toContain('<g class="flag" transform="translate(1053.0 45)">')
+  await ui.unmount()
 })
