@@ -31,8 +31,13 @@ export type Stats = {
 /** One rate-limit window: `five_hour`, `seven_day`, or a gateway's `spend_limit`. */
 export type Limit = { kind: string; percentUsed: number; resetsAt?: string }
 
+/** A short reaction a character plays: tripping on a tool error, cheering at a finished turn, stopping when interrupted. */
+export type ReactionKind = 'trip' | 'finish' | 'stop'
+/** `target` is `runner` or a follower's agent id; `at` is when it began, `$.clock.now()` ms. */
+export type Reaction = { target: string; kind: ReactionKind; at: number }
+
 declare module 'claude-code' {
   interface PluginState {
-    'runner-buddy': { frame: Frame; crew: Crew; tokens: Tokens; stats: Stats | null }
+    'runner-buddy': { frame: Frame; crew: Crew; tokens: Tokens; stats: Stats | null; reactions: Reaction[] }
   }
 }
