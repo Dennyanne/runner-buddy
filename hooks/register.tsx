@@ -37,7 +37,7 @@ const LIMIT_LABELS: Record<string, string> = { five_hour: '5h', seven_day: '주�
 const SCALE = 0.7 // shown at this fraction of the drawing's units
 const CANVAS = 2400 // px; the band crops the right side, so obstacles reach the edge
 const PX_PER_CELL = 7.5 // the band reports code-font cells, not pixels
-const HEIGHT = 64 // drawing units; constant so the band never changes height
+const HEIGHT = 76 // drawing units; constant so the band never changes height
 const GROUND = 48 // y of every character's feet and every obstacle's base
 const STEP = 72 // units between followers' slots
 const SPACING = 120 // units between obstacles
@@ -98,6 +98,37 @@ function shorten(text: string, max: number): string {
   return text.length > max ? text.slice(0, max - 1) + '…' : text
 }
 
+// The model family from an id: claude-haiku-5-5 -> haiku; anything else, shortened.
+function shortModel(model: string | undefined): string | null {
+  if (!model) return null
+  const family = /(haiku|sonnet|opus|fable)/i.exec(model)?.[1]
+  return family ? family.toLowerCase() : shorten(model.replace(/^claude-/, ''), 8)
+}
+
+// 0:42, 12:05, 1:03:20
+function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const sec = String(total % 60).padStart(2, '0')
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`
+}
+
+// A follower's second line, at most `max` characters: its model and how long it
+// has run (frozen once it finished). The time is never cut; the model gives way
+// first to a shorter name, then to its initial: "haiku 0:42", "o 1:02:03".
+function followerMeta(f: Follower, nowMs: number | null, max: number): string {
+  const model = shortModel(f.model)
+  const time = nowMs === null ? null : formatElapsed((f.leftAt ?? nowMs) - f.joinedAt)
+  if (!time) return shorten(model ?? '', max)
+  if (!model) return time
+  const full = `${model} ${time}`
+  if (full.length <= max) return full
+  const room = max - time.length - 1
+  if (room >= 4) return `${shorten(model, room)} ${time}`
+  return `${model[0]} ${time}`
+}
+
 function mod(a: number, b: number): number {
   return ((a % b) + b) % b
 }
@@ -144,9 +175,11 @@ function sceneSvg(state: Crew, slots: number, nowMs: number): string {
           ? `class="enter" style="animation-delay: -${Math.max(0, ageS).toFixed(3)}s"`
           : `class="exit" style="animation-delay: -${Math.max(0, (nowMs - f.leftAt) / 1000).toFixed(3)}s"`
       const label = escapeXml(shorten(f.label, 9))
+      const meta = escapeXml(followerMeta(f, nowMs, 11))
       return `<g transform="translate(${x} ${GROUND})"><g ${life}>
 <g class="jump" style="animation-delay: ${jumpDelay(x).toFixed(3)}s">${blob(f.color, false)}</g>
 <text class="name" x="0" y="12" text-anchor="middle" fill="${f.color}">${label}</text>
+<text class="meta" x="0" y="25" text-anchor="middle" fill="${f.color}">${meta}</text>
 </g></g>`
     })
     .join('\n')
@@ -176,6 +209,7 @@ function sceneSvg(state: Crew, slots: number, nowMs: number): string {
 .enter { transform-box: view-box; transform-origin: 0 0; animation: enter 0.5s cubic-bezier(0.3, 1.5, 0.5, 1) both; }
 .exit { transform-box: view-box; transform-origin: 0 0; animation: exit ${EXIT_MS / 1000}s ease-in both; }
 .name { font: 600 13px system-ui, sans-serif; }
+.meta { font: 500 11px system-ui, sans-serif; opacity: 0.75; font-variant-numeric: tabular-nums; }
 @keyframes slide { from { transform: translateX(0); } to { transform: translateX(-${SPACING * OBJECTS.length}px); } }
 @keyframes jump {
   0% { transform: translateY(0) scale(1.1, 0.88); animation-timing-function: ease-out; }
@@ -217,7 +251,7 @@ function rowParts(cells: Cell[]): Part[] {
   return parts
 }
 
-function terminalScene(state: Crew, n: number, cols: number): Part[][] {
+function terminalScene(state: Crew, n: number, cols: number, nowMs: number | null): Part[][] {
   const width = Math.max(30, cols - 1)
   const slots = capacity(cols, 1, T_STEP, 24)
   const runnerCol = 2 + slots * T_STEP
@@ -225,6 +259,7 @@ function terminalScene(state: Crew, n: number, cols: number): Part[][] {
   const air = blank()
   const floor = blank()
   const names = blank()
+  const metas = blank()
 
   // Obstacles slide one cell left per tick.
   const isObstacle = (x: number) => mod(x + n, T_GAP) === 0
@@ -250,9 +285,13 @@ function terminalScene(state: Crew, n: number, cols: number): Part[][] {
     const col = runnerCol - (f.slot + 1) * T_STEP
     draw(col, FOLLOWER_SPRITE, f.color)
     put(names, col, shorten(f.label, T_STEP - 1), f.color)
+    // "h 0:42": the model's initial keeps it inside the slot.
+    put(metas, col, followerMeta({ ...f, model: shortModel(f.model)?.[0] }, nowMs, T_STEP - 1), f.color)
   }
   draw(runnerCol, RUNNER_SPRITE, RUNNER_COLOR)
-  return [air, floor, names].map(rowParts)
+  const rows = [air, floor, names]
+  if (metas.some(c => c.ch !== ' ')) rows.push(metas)
+  return rows.map(rowParts)
 }
 
 // ---- usage row ----
@@ -356,7 +395,7 @@ async function refreshStats($: EngineInterface) {
 // ---- timer and subagent tracking ----
 let timer: Timer | null = null
 let isMainWorking = false
-const labels = new Map<string, string>()
+const known = new Map<string, { label: string; model?: string }>()
 
 function start($: EngineInterface) {
   if (timer) return
@@ -374,15 +413,18 @@ async function stop($: EngineInterface) {
   await update($, frame, () => 0)
 }
 
-async function labelOf($: EngineInterface, id: string): Promise<string> {
-  const known = labels.get(id)
-  if (known) return known
+async function infoOf($: EngineInterface, id: string): Promise<{ label: string; model?: string }> {
+  const remembered = known.get(id)
+  if (remembered?.model) return remembered
   const info = (await $.agent.list()).find(a => a.id === id)
-  return info?.name ?? info?.type ?? 'agent'
+  return {
+    label: remembered?.label ?? info?.name ?? info?.type ?? 'agent',
+    ...(remembered?.model ?? info?.model ? { model: remembered?.model ?? info?.model } : {}),
+  }
 }
 
 async function join($: EngineInterface, id: string) {
-  const label = await labelOf($, id)
+  const { label, model } = await infoOf($, id)
   const now = await $.clock.now()
   await update($, crew, state => {
     const existing = state.list.find(f => f.id === id)
@@ -398,6 +440,7 @@ async function join($: EngineInterface, id: string) {
     const follower: Follower = existing
       ? { id, label, color, slot: existing.slot, joinedAt: existing.joinedAt }
       : { id, label, color, slot, joinedAt: now }
+    if (model) follower.model = model
     return { list: [...others, follower], stamp: now }
   })
 }
@@ -413,7 +456,7 @@ async function remove($: EngineInterface, id: string) {
 }
 
 async function leave($: EngineInterface, id: string) {
-  labels.delete(id)
+  known.delete(id)
   const now = await $.clock.now()
   await update($, crew, state => ({
     list: state.list.map(f => (f.id === id ? { ...f, leftAt: now } : f)),
@@ -438,16 +481,17 @@ async function prune($: EngineInterface) {
 }
 
 export const register: Register = on => {
-  // Remember each subagent's name (or its type) as it is spawned.
+  // Remember each subagent's name (or its type) and model as it is spawned.
   on('agent.spawn', async ($, e, next) => {
     const result = await next(e)
     if (result.agentId) {
       const id = result.agentId
       const label = e.name ?? e.subagentType
-      labels.set(id, label)
+      const model = result.model
+      known.set(id, model ? { label, model } : { label })
       await update($, crew, state =>
-        state.list.some(f => f.id === id && f.label !== label)
-          ? { ...state, list: state.list.map(f => (f.id === id ? { ...f, label } : f)) }
+        state.list.some(f => f.id === id && (f.label !== label || (model && f.model !== model)))
+          ? { ...state, list: state.list.map(f => (f.id === id ? { ...f, label, ...(model ? { model } : {}) } : f)) }
           : state,
       )
     }
@@ -545,7 +589,7 @@ export const register: Register = on => {
     }
 
     const n = await read($, frame)
-    const rows = terminalScene(state, n, cols)
+    const rows = terminalScene(state, n, cols, st?.at ?? null)
     return (
       <Box flexDirection="column">
         {/* Each scene row is one line cut to the band, never wrapped: a wrap would
