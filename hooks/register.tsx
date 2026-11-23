@@ -293,51 +293,44 @@ function formatUntil(resetsAt: string | undefined, nowMs: number): string | null
   return `${Math.floor(hours / 24)}d${hours % 24}h`
 }
 
-// 5h 38% (2h13m)  주간 12% (3d4h)
-function limitParts(st: Stats): Part[] {
-  const parts: Part[] = []
-  for (const limit of st.limits ?? []) {
-    const pct = Math.max(0, Math.round(limit.percentUsed))
-    if (parts.length > 0) parts.push({ text: '  ' })
-    parts.push({ text: `${LIMIT_LABELS[limit.kind] ?? limit.kind} `, dim: true }, { text: `${pct}%`, color: limitColor(pct) })
-    const until = formatUntil(limit.resetsAt, st.at)
-    if (until) parts.push({ text: ` (${until})`, dim: true })
-  }
-  return parts
-}
-
-// ctx [████░░░░░░] 42% 116k 남음  ·  5h 38% (2h13m)  주간 12% (3d4h)  ·  토큰 in 1.2M / out 34k  ·  캐시 적중 87%  ·  에이전트 3
-function statParts(st: Stats | null, crewCount: number, isTerminal: boolean): Part[] {
-  const sep: Part = { text: '  ·  ', dim: true }
-  const parts: Part[] = [{ text: 'ctx ', dim: true }]
+// The usage row as groups, each drawn as one unit that never breaks inside:
+// on a narrow band whole groups move to the next line.
+//   ctx [████░░░░░░] 42% 116k 남음 | 5h 38% (2h13m) | 주간 12% (3d4h) | 토큰 in 1.2M / out 34k | 캐시 적중 87% | 에이전트 3
+function statGroups(st: Stats | null, crewCount: number, isTerminal: boolean): Part[][] {
+  const groups: Part[][] = []
+  const ctx: Part[] = [{ text: 'ctx ', dim: true }]
   if (st === null || st.ctxPercent === null) {
-    parts.push({ text: '--', dim: true })
+    ctx.push({ text: '--', dim: true })
   } else {
     const pct = Math.min(100, Math.max(0, Math.round(st.ctxPercent)))
     const color = ctxColor(pct)
     const filled = Math.round(pct / 10)
     const [on, off] = isTerminal ? ['#', '.'] : ['█', '░']
-    parts.push({ text: '[', dim: true }, { text: on.repeat(filled), color }, { text: off.repeat(10 - filled), dim: true })
-    parts.push({ text: '] ', dim: true }, { text: `${pct}%`, color })
+    ctx.push({ text: '[', dim: true }, { text: on.repeat(filled), color }, { text: off.repeat(10 - filled), dim: true })
+    ctx.push({ text: '] ', dim: true }, { text: `${pct}%`, color })
     if (st.ctxTokens !== null) {
-      parts.push({ text: ` ${formatCount(Math.max(0, st.ctxWindow - st.ctxTokens))} 남음`, dim: true })
+      ctx.push({ text: ` ${formatCount(Math.max(0, st.ctxWindow - st.ctxTokens))} 남음`, dim: true })
     }
-    if (pct >= CTX_COMPACT) parts.push({ text: ' /compact?', color })
+    if (pct >= CTX_COMPACT) ctx.push({ text: ' /compact?', color })
   }
+  groups.push(ctx)
   if (st !== null) {
-    const limits = limitParts(st)
-    if (limits.length > 0) parts.push(sep, ...limits)
-    parts.push(sep, { text: '토큰 ', dim: true }, { text: `in ${formatCount(st.input)} / out ${formatCount(st.output)}` })
-    parts.push(sep, { text: '캐시 적중 ', dim: true })
-    if (st.input > 0) {
-      const hit = Math.round((st.cacheRead / st.input) * 100)
-      parts.push({ text: `${hit}%`, color: cacheColor(hit) })
-    } else {
-      parts.push({ text: '--', dim: true })
+    for (const limit of st.limits ?? []) {
+      const pct = Math.max(0, Math.round(limit.percentUsed))
+      const window: Part[] = [{ text: `${LIMIT_LABELS[limit.kind] ?? limit.kind} `, dim: true }, { text: `${pct}%`, color: limitColor(pct) }]
+      const until = formatUntil(limit.resetsAt, st.at)
+      if (until) window.push({ text: ` (${until})`, dim: true })
+      groups.push(window)
     }
+    groups.push([{ text: '토큰 ', dim: true }, { text: `in ${formatCount(st.input)} / out ${formatCount(st.output)}` }])
+    const hit = st.input > 0 ? Math.round((st.cacheRead / st.input) * 100) : null
+    groups.push([
+      { text: '캐시 적중 ', dim: true },
+      hit === null ? { text: '--', dim: true } : { text: `${hit}%`, color: cacheColor(hit) },
+    ])
   }
-  if (crewCount > 0) parts.push(sep, { text: `에이전트 ${crewCount}`, dim: true })
-  return parts
+  if (crewCount > 0) groups.push([{ text: `에이전트 ${crewCount}`, dim: true }])
+  return groups
 }
 
 async function refreshStats($: EngineInterface) {
@@ -507,11 +500,17 @@ export const register: Register = on => {
     const cols = e.props.bodyColumns
     const running = state.list.filter(f => f.leftAt === undefined)
     const st = await read($, stats)
-    const row = statParts(st, running.length, e.surface === 'terminal')
+    const groups = statGroups(st, running.length, e.surface === 'terminal')
+    // Each group is one Text holding its coloured runs, so it wraps as a unit;
+    // one wider than the band is cut with an ellipsis rather than broken.
     const statsRow = (
-      <Box flexDirection="row">
-        {row.map((p, i) => (
-          <Text key={`s${i}`} color={p.color} dimColor={p.dim}>{p.text}</Text>
+      <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
+        {groups.map((g, i) => (
+          <Text key={`g${i}`} wrap="truncate">
+            {g.map((p, j) => (
+              <Text key={`g${i}p${j}`} color={p.color} dimColor={p.dim}>{p.text}</Text>
+            ))}
+          </Text>
         ))}
       </Box>
     )
@@ -549,12 +548,14 @@ export const register: Register = on => {
     const rows = terminalScene(state, n, cols)
     return (
       <Box flexDirection="column">
+        {/* Each scene row is one line cut to the band, never wrapped: a wrap would
+            push its characters out of line with the row above. */}
         {rows.map((parts, r) => (
-          <Box key={`r${r}`} flexDirection="row">
+          <Text key={`r${r}`} wrap="truncate">
             {parts.map((p, i) => (
               <Text key={`r${r}c${i}`} color={p.color} dimColor={p.dim}>{p.text}</Text>
             ))}
-          </Box>
+          </Text>
         ))}
         {statsRow}
       </Box>

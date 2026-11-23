@@ -52,6 +52,14 @@ function seed(on: On, crew: Crew, stats: Stats | null = STATS, frame = 7, clock:
   })
 }
 
+type Found = { text: string; props: Record<string, unknown> }
+
+// The lines drawn as single units: the usage row's groups (and, on the
+// terminal, the scene's rows), each one Text that cuts rather than wraps.
+async function units(ui: { findAll: (q: { type: 'Text' }) => Promise<Found[]> }) {
+  return (await ui.findAll({ type: 'Text' })).filter(t => t.props.wrap === 'truncate').map(t => t.text)
+}
+
 async function allText(ui: { findAll: (q: { type: 'Text' }) => Promise<{ text: string }[]> }) {
   return (await ui.findAll({ type: 'Text' })).map(t => t.text).join('')
 }
@@ -213,9 +221,9 @@ test('terminal: a character jumps while an obstacle passes under it', async ($, 
   // sits at every x with (x + n) % 14 === 0, so frame 10 puts one at x = 60.
   seed(on, EMPTY, STATS, 10)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  const rows = await ui.findAll({ type: 'Box' })
-  const firstRow = rows.find(b => b.props.flexDirection === 'row')
-  expect(firstRow?.text).toContain('(^^)') // in the air row
+  const [air, floor] = await units(ui)
+  expect(air).toContain('(^^)') // in the air row
+  expect(floor?.includes('(^^)')).toBe(false)
   await ui.unmount()
 })
 
@@ -282,7 +290,11 @@ test('a window with no reset time, or one already passed, shows no countdown', a
   })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const row = await allText(ui)
-  expect(row).toContain('5h 5%  주간 9%  한도 41% (30m)')
+  expect(row).toContain('5h 5%')
+  const groups = await units(ui)
+  expect(groups).toContain('5h 5%')
+  expect(groups).toContain('주간 9%')
+  expect(groups).toContain('한도 41% (30m)')
   await ui.unmount()
 })
 
@@ -291,6 +303,40 @@ test('with no rate limits (an API key, say) the gauge is left out', async ($, on
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const row = await allText(ui)
   expect(row.includes('5h')).toBe(false)
-  expect(row).toContain('42% 116k 남음  ·  토큰')
+  expect(await units(ui)).toEqual(['ctx [████░░░░░░] 42% 116k 남음', '토큰 in 1.2M / out 34.2k', '캐시 적중 87%'])
+  await ui.unmount()
+})
+
+// ---- wrapping on a narrow band ----
+test('the usage row wraps by whole groups, each cut rather than broken, with no stray separators', async ($, on) => {
+  seed(on, CREW, {
+    ...STATS,
+    limits: [
+      { kind: 'five_hour', percentUsed: 38, resetsAt: new Date(NOW + 2 * HOUR).toISOString() },
+      { kind: 'seven_day', percentUsed: 12, resetsAt: new Date(NOW + 76 * HOUR).toISOString() },
+    ],
+  })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 40 }, surface })
+    const row = (await ui.findAll({ type: 'Box' })).find(b => b.props.flexWrap === 'wrap')
+    expect(row).toBeDefined()
+    expect(row?.props.flexDirection).toBe('row')
+    // Every group is its own unit, so a wrap can only fall between them.
+    const groups = await units(ui)
+    for (const g of ['5h 38% (2h00m)', '주간 12% (3d4h)', '토큰 in 1.2M / out 34.2k', '캐시 적중 87%', '에이전트 3']) {
+      expect(groups).toContain(g)
+    }
+    expect(groups.some(g => g.startsWith('ctx ['))).toBe(true)
+    expect((await allText(ui)).includes('·')).toBe(false)
+    await ui.unmount()
+  }
+})
+
+test('terminal: the scene rows are cut to the band, never wrapped', async ($, on) => {
+  seed(on, CREW)
+  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 40 }, surface: 'terminal' })
+  const sceneRows = (await units(ui)).slice(0, 3)
+  expect(sceneRows.length).toBe(3)
+  for (const r of sceneRows) expect(r.length).toBeLessThanOrEqual(39)
   await ui.unmount()
 })
