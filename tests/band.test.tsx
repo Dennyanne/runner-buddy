@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import type { Crew, Stats } from '../types'
+import type { Crew, Reaction, Stats } from '../types'
 
 const NOW = 100_000
 
@@ -43,8 +43,8 @@ const BAND = {
 type On = Parameters<Extract<Parameters<typeof test>[1], (...args: never[]) => unknown>>[1]
 
 // `clock` is what `$.clock.now()` answers while drawing; null refuses it.
-function seed(on: On, crew: Crew, stats: Stats | null = STATS, frame = 7, clock: number | null = NOW) {
-  const values: Record<string, unknown> = { crew, frame, stats, tokens: { input: 0, output: 0, cacheRead: 0 } }
+function seed(on: On, crew: Crew, stats: Stats | null = STATS, frame = 7, clock: number | null = NOW, reactions: Reaction[] = []) {
+  const values: Record<string, unknown> = { crew, frame, stats, tokens: { input: 0, output: 0, cacheRead: 0 }, reactions }
   on('state.get', (_, e) => ({ value: { value: values[e.key] ?? null, version: 1 } }))
   on('clock.now', () => {
     if (clock === null) throw new Error('refused while drawing')
@@ -430,5 +430,85 @@ test('before the first reading the runner is fresh', async ($, on) => {
   seed(on, EMPTY, null)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await svgSource(ui)).includes('class="sweat"')).toBe(false)
+  await ui.unmount()
+})
+
+// ---- reactions: trip on an error, cheer at the end, stop when interrupted ----
+const idle = { ...BAND, props: { ...BAND.props, isWorking: false } }
+
+test('a runner that tripped falls with stars, phased from when it tripped', async ($, on) => {
+  seed(on, EMPTY, STATS, 7, NOW, [{ target: 'runner', kind: 'trip', at: NOW - 300 }])
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source).toContain('class="trip" style="animation-delay: -0.300s"')
+  expect(source).toContain('class="stars"')
+  expect(source.includes('class="jump"')).toBe(false) // it is not jumping while it lies there
+  await ui.unmount()
+})
+
+test('a follower whose tool call failed trips alone; the others keep jumping', async ($, on) => {
+  seed(on, CREW, STATS, 7, NOW, [{ target: 'a2', kind: 'trip', at: NOW }])
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source.match(/class="trip"/g)?.length).toBe(1)
+  expect(source.match(/class="jump"/g)?.length).toBe(3) // two followers and the runner
+  await ui.unmount()
+})
+
+test('a finished turn: the runner cheers with confetti, smiling even when exhausted, after the turn ended', async ($, on) => {
+  seed(on, EMPTY, { ...STATS, ctxPercent: 90, ctxTokens: 180_000 }, 7, NOW, [{ target: 'runner', kind: 'finish', at: NOW - 500 }])
+  const ui = await $.ui.mount({ ...idle, surface: 'desktop' }) // the turn is over: isWorking is false
+  const source = await svgSource(ui)
+  expect(source).toContain('class="cheer" style="animation-delay: -0.500s"')
+  expect(source.match(/class="confetti/g)?.length).toBe(8)
+  expect(source).toContain('Q 4.5 -7.5 8 -10') // the smile
+  await ui.unmount()
+})
+
+test('an interrupted turn: the runner stands still with a "…" bubble', async ($, on) => {
+  seed(on, EMPTY, STATS, 7, NOW, [{ target: 'runner', kind: 'stop', at: NOW }])
+  const ui = await $.ui.mount({ ...idle, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source).toContain('class="say"')
+  expect(source).toContain('>…</text>')
+  expect(source.includes('class="jump"')).toBe(false)
+  await ui.unmount()
+})
+
+for (const [kind, shows] of [
+  ['trip', ['(xx)', '*  *']],
+  ['finish', ['\\^^/']],
+  ['stop', ['(^^)', '...']],
+] as const) {
+  test(`terminal: the runner's ${kind} reaction`, async ($, on) => {
+    seed(on, EMPTY, STATS, 0, NOW, [{ target: 'runner', kind, at: NOW }])
+    const ui = await $.ui.mount({ ...idle, surface: 'terminal' })
+    const text = await allText(ui)
+    for (const s of shows) expect(text).toContain(s)
+    await ui.unmount()
+  })
+}
+
+test('a failed tool call trips the runner; a successful one does not', async ($, on) => {
+  on('clock.now', () => ({ value: NOW })) // the kit answers no clock by itself
+  let fail = true
+  on('tool.call', () => (fail ? { isError: true as const, result: {}, text: 'exit 1' } : { result: {} }))
+  await $.tool.call({ tool: 'Bash', command: 'true' } as never).catch(() => undefined)
+  const tripped = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await svgSource(tripped)).toContain('class="trip"')
+  await tripped.unmount()
+  fail = false
+  await $.tool.call({ tool: 'Bash', command: 'true' } as never).catch(() => undefined)
+  const still = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await svgSource(still)).toContain('class="trip"') // the first trip is still playing; no new one replaced it
+  await still.unmount()
+})
+
+test("a subagent's failed tool call trips that subagent, not the runner", async ($, on) => {
+  on('clock.now', () => ({ value: NOW }))
+  on('tool.call', () => ({ isError: true as const, result: {}, text: 'exit 1' }))
+  await $.tool.call({ tool: 'Bash', command: 'false', agentId: 'a1' } as never).catch(() => undefined)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect((await svgSource(ui)).includes('class="trip"')).toBe(false) // a1 is not on the band here, and the runner did not trip
   await ui.unmount()
 })
