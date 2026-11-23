@@ -307,29 +307,80 @@ test('with no rate limits (an API key, say) the gauge is left out', async ($, on
   await ui.unmount()
 })
 
-// ---- wrapping on a narrow band ----
-test('the usage row wraps by whole groups, each cut rather than broken, with no stray separators', async ($, on) => {
-  seed(on, CREW, {
-    ...STATS,
-    limits: [
-      { kind: 'five_hour', percentUsed: 38, resetsAt: new Date(NOW + 2 * HOUR).toISOString() },
-      { kind: 'seven_day', percentUsed: 12, resetsAt: new Date(NOW + 76 * HOUR).toISOString() },
-    ],
-  })
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 40 }, surface })
-    const row = (await ui.findAll({ type: 'Box' })).find(b => b.props.flexWrap === 'wrap')
-    expect(row).toBeDefined()
-    expect(row?.props.flexDirection).toBe('row')
-    // Every group is its own unit, so a wrap can only fall between them.
-    const groups = await units(ui)
-    for (const g of ['5h 38% (2h00m)  주간 12% (3d4h)', '토큰 in 1.2M / out 34.2k', '캐시 적중 87%', '에이전트 3']) {
-      expect(groups).toContain(g)
-    }
-    expect(groups.some(g => g.startsWith('ctx ['))).toBe(true)
-    expect((await allText(ui)).includes('·')).toBe(false)
-    await ui.unmount()
+// ---- one line: detail gives way as the band narrows ----
+const LIMITS = [
+  { kind: 'five_hour', percentUsed: 38, resetsAt: new Date(NOW + 2 * HOUR).toISOString() },
+  { kind: 'seven_day', percentUsed: 12, resetsAt: new Date(NOW + 76 * HOUR).toISOString() },
+]
+const BUSY_STATS: Stats = { ...STATS, limits: LIMITS, plan: 'subscription', usd: 3.21 }
+
+// The same cell count the mod uses: Hangul two cells, the rest one.
+function cells(text: string): number {
+  let n = 0
+  for (const ch of text) {
+    const c = ch.codePointAt(0) ?? 0
+    n += (c >= 0xac00 && c <= 0xd7a3) || (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) ? 2 : 1
   }
+  return n
+}
+
+async function usageRow(ui: { findAll: (q: { type: 'Box' }) => Promise<Found[]> } & Parameters<typeof units>[0]) {
+  const row = (await ui.findAll({ type: 'Box' })).find(b => b.props.flexWrap !== undefined)
+  const all = await units(ui)
+  const groups = all.slice(all.findIndex(g => g.startsWith('ctx ')))
+  const gap = Number(row?.props.columnGap ?? 0)
+  return { row, groups, width: groups.reduce((n, g) => n + cells(g), 0) + gap * Math.max(0, groups.length - 1) }
+}
+
+test('a wide band shows the usage row in full detail, on one line', async ($, on) => {
+  seed(on, CREW, BUSY_STATS)
+  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 220 }, surface: 'desktop' })
+  const { row, groups } = await usageRow(ui)
+  expect(row?.props.flexWrap).toBe('nowrap')
+  expect(groups).toEqual([
+    'ctx [████░░░░░░] 42% 116k 남음',
+    '5h 38% (2h00m)  주간 12% (3d4h)',
+    '토큰 in 1.2M / out 34.2k',
+    '캐시 적중 87%',
+    '요금 구독제',
+    '에이전트 3',
+  ])
+  await ui.unmount()
+})
+
+test('as the band narrows the row drops detail, most expendable first, and never wraps', async ($, on) => {
+  seed(on, CREW, BUSY_STATS)
+  const at = async (bodyColumns: number) => {
+    const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns }, surface: 'desktop' })
+    const r = await usageRow(ui)
+    await ui.unmount()
+    return r
+  }
+  expect((await at(110)).groups).toEqual(['ctx [██░░░] 42%', '5h 38% (2h00m)  주간 12% (3d4h)', '토큰 1.2M/34.2k', '캐시 87%', '구독제', '에이전트 3'])
+  expect((await at(60)).groups).toEqual(['ctx 42%', '5h 38%  주간 12%', '캐시 87%', '구독제', '에이전트 3'])
+  expect((await at(40)).groups).toEqual(['ctx 42%', '5h 38%  주간 12%', '에이전트 3'])
+  expect((await at(24)).groups).toEqual(['ctx 42%', '에이전트 3'])
+})
+
+test('at every width from 20 to 240 columns the row fits on one line, or is down to its least', async ($, on) => {
+  seed(on, CREW, BUSY_STATS)
+  for (let bodyColumns = 20; bodyColumns <= 240; bodyColumns += 4) {
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns }, surface })
+      const { row, groups, width } = await usageRow(ui)
+      expect(row?.props.flexWrap).toBe('nowrap')
+      const least = groups.length === 2 && groups[0] === 'ctx 42%' && groups[1] === '에이전트 3'
+      expect(width <= bodyColumns - 1 || least).toBe(true)
+      await ui.unmount()
+    }
+  }
+})
+
+test('the compact hint shortens to "!" once the bar is gone', async ($, on) => {
+  seed(on, EMPTY, { ...BUSY_STATS, ctxPercent: 88, ctxTokens: 176_000 })
+  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 40 }, surface: 'desktop' })
+  expect((await usageRow(ui)).groups[0]).toBe('ctx 88%!')
+  await ui.unmount()
 })
 
 test('terminal: the scene rows are cut to the band, never wrapped', async ($, on) => {

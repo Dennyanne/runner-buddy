@@ -465,10 +465,16 @@ function formatUntil(resetsAt: string | undefined, nowMs: number): string | null
   return `${Math.floor(hours / 24)}d${hours % 24}h`
 }
 
-// The usage row as groups, each drawn as one unit that never breaks inside:
-// on a narrow band whole groups move to the next line.
-//   ctx [████░░░░░░] 42% 116k 남음 | 5h 38% (2h13m)  주간 12% (3d4h) | 토큰 in 1.2M / out 34k | 캐시 적중 87% | 요금 구독제 | 에이전트 3
-function statGroups(st: Stats | null, crewCount: number, isTerminal: boolean): Part[][] {
+// The usage row as groups at a level of detail, 0 the most. The row is one
+// line: it drops detail until it fits rather than wrapping.
+//   0  ctx [██████████] 42% 116k 남음   5h 38% (2h13m)  주간 12% (3d4h)   토큰 in 1.2M / out 34k   캐시 적중 87%   요금 구독제   에이전트 3
+//   1  ctx [█████] 42%   5h 38% (2h13m)  주간 12% (3d4h)   토큰 1.2M/34k   캐시 87%   구독제   에이전트 3
+//   2  ctx 42%  5h 38%  주간 12%  캐시 87%  구독제  에이전트 3
+//   3  ctx 42%  5h 38%  주간 12%  에이전트 3
+//   4  ctx 42%  에이전트 3
+const DETAIL_LEVELS = 5
+
+function statGroups(st: Stats | null, crewCount: number, isTerminal: boolean, level = 0): Part[][] {
   const groups: Part[][] = []
   const ctx: Part[] = [{ text: 'ctx ', dim: true }]
   if (st === null || st.ctxPercent === null) {
@@ -476,47 +482,97 @@ function statGroups(st: Stats | null, crewCount: number, isTerminal: boolean): P
   } else {
     const pct = Math.min(100, Math.max(0, Math.round(st.ctxPercent)))
     const color = ctxColor(pct)
-    const filled = Math.round(pct / 10)
-    const [on, off] = isTerminal ? ['#', '.'] : ['█', '░']
-    ctx.push({ text: '[', dim: true }, { text: on.repeat(filled), color }, { text: off.repeat(10 - filled), dim: true })
-    ctx.push({ text: '] ', dim: true }, { text: `${pct}%`, color })
-    if (st.ctxTokens !== null) {
+    const cells = level === 0 ? 10 : level === 1 ? 5 : 0
+    if (cells > 0) {
+      const filled = Math.round((pct / 100) * cells)
+      const [on, off] = isTerminal ? ['#', '.'] : ['█', '░']
+      ctx.push({ text: '[', dim: true }, { text: on.repeat(filled), color }, { text: off.repeat(cells - filled), dim: true }, { text: '] ', dim: true })
+    }
+    ctx.push({ text: `${pct}%`, color })
+    if (level === 0 && st.ctxTokens !== null) {
       ctx.push({ text: ` ${formatCount(Math.max(0, st.ctxWindow - st.ctxTokens))} 남음`, dim: true })
     }
-    if (pct >= CTX_COMPACT) ctx.push({ text: ' /compact?', color })
+    if (pct >= CTX_COMPACT) ctx.push({ text: level <= 1 ? ' /compact?' : '!', color })
   }
   groups.push(ctx)
   if (st !== null) {
     // All the rate-limit windows together, as one unit: they read as a pair.
-    const windows: Part[] = []
-    for (const limit of st.limits ?? []) {
-      const pct = Math.max(0, Math.round(limit.percentUsed))
-      if (windows.length > 0) windows.push({ text: '  ' })
-      windows.push({ text: `${LIMIT_LABELS[limit.kind] ?? limit.kind} `, dim: true }, { text: `${pct}%`, color: limitColor(pct) })
-      const until = formatUntil(limit.resetsAt, st.at)
-      if (until) windows.push({ text: ` (${until})`, dim: true })
+    if (level <= 3) {
+      const windows: Part[] = []
+      for (const limit of st.limits ?? []) {
+        const pct = Math.max(0, Math.round(limit.percentUsed))
+        if (windows.length > 0) windows.push({ text: '  ' })
+        windows.push({ text: `${LIMIT_LABELS[limit.kind] ?? limit.kind} `, dim: true }, { text: `${pct}%`, color: limitColor(pct) })
+        const until = level <= 1 ? formatUntil(limit.resetsAt, st.at) : null
+        if (until) windows.push({ text: ` (${until})`, dim: true })
+      }
+      if (windows.length > 0) groups.push(windows)
     }
-    if (windows.length > 0) groups.push(windows)
-    groups.push([{ text: '토큰 ', dim: true }, { text: `in ${formatCount(st.input)} / out ${formatCount(st.output)}` }])
-    const hit = st.input > 0 ? Math.round((st.cacheRead / st.input) * 100) : null
-    groups.push([
-      { text: '캐시 적중 ', dim: true },
-      hit === null ? { text: '--', dim: true } : { text: `${hit}%`, color: cacheColor(hit) },
-    ])
-    // On a subscription, use inside the plan is not billed in dollars: say so
-    // instead of a figure. Otherwise the engine's estimate, labelled as one.
-    if (st.plan === 'subscription') {
-      groups.push([{ text: '요금 ', dim: true }, { text: '구독제' }])
-    } else if (st.usd !== undefined) {
+    if (level === 0) {
+      groups.push([{ text: '토큰 ', dim: true }, { text: `in ${formatCount(st.input)} / out ${formatCount(st.output)}` }])
+    } else if (level === 1) {
+      groups.push([{ text: '토큰 ', dim: true }, { text: `${formatCount(st.input)}/${formatCount(st.output)}` }])
+    }
+    if (level <= 2) {
+      const hit = st.input > 0 ? Math.round((st.cacheRead / st.input) * 100) : null
       groups.push([
-        { text: '요금 ', dim: true },
-        { text: `~$${st.usd.toFixed(2)}${st.hasUnknownPrice ? '*' : ''}` },
-        { text: ' (추정)', dim: true },
+        { text: level === 0 ? '캐시 적중 ' : '캐시 ', dim: true },
+        hit === null ? { text: '--', dim: true } : { text: `${hit}%`, color: cacheColor(hit) },
       ])
+      // On a subscription, use inside the plan is not billed in dollars: say so
+      // instead of a figure. Otherwise the engine's estimate, labelled as one.
+      const fee: Part[] = level === 0 ? [{ text: '요금 ', dim: true }] : []
+      if (st.plan === 'subscription') {
+        groups.push([...fee, { text: '구독제' }])
+      } else if (st.usd !== undefined) {
+        const amount: Part = { text: `~$${st.usd.toFixed(2)}${st.hasUnknownPrice ? '*' : ''}` }
+        groups.push(level === 0 ? [...fee, amount, { text: ' (추정)', dim: true }] : [amount])
+      }
     }
   }
   if (crewCount > 0) groups.push([{ text: `에이전트 ${crewCount}`, dim: true }])
   return groups
+}
+
+// Cells a text takes on a monospaced grid: Hangul and other wide letters two,
+// the rest one (the bar's blocks and the ellipsis included).
+function cellWidth(text: string): number {
+  let cells = 0
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0
+    const wide =
+      (code >= 0x1100 && code <= 0x115f) ||
+      (code >= 0x2e80 && code <= 0xa4cf) ||
+      (code >= 0xac00 && code <= 0xd7a3) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xfe30 && code <= 0xfe4f) ||
+      (code >= 0xff00 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6)
+    cells += wide ? 2 : 1
+  }
+  return cells
+}
+
+// The gap between groups, in cells: roomier at the detailed levels.
+function groupGap(level: number): number {
+  return level <= 1 ? 3 : 2
+}
+
+function rowWidth(groups: Part[][], level: number): number {
+  const text = groups.reduce((sum, g) => sum + g.reduce((n, p) => n + cellWidth(p.text), 0), 0)
+  return text + groupGap(level) * Math.max(0, groups.length - 1)
+}
+
+// The most detailed level whose row fits in `cols` cells; the least, cut at
+// its end, when even that does not.
+function fitStats(st: Stats | null, crewCount: number, isTerminal: boolean, cols: number): { groups: Part[][]; level: number } {
+  const room = Math.max(1, cols - 1)
+  for (let level = 0; level < DETAIL_LEVELS - 1; level++) {
+    const groups = statGroups(st, crewCount, isTerminal, level)
+    if (rowWidth(groups, level) <= room) return { groups, level }
+  }
+  const level = DETAIL_LEVELS - 1
+  return { groups: statGroups(st, crewCount, isTerminal, level), level }
 }
 
 // How the session is signed in, read once: it does not change within a session.
@@ -774,11 +830,12 @@ export const register: Register = on => {
     const cols = e.props.bodyColumns
     const running = state.list.filter(f => f.leftAt === undefined)
     const st = await read($, stats)
-    const groups = statGroups(st, running.length, e.surface === 'terminal')
-    // Each group is one Text holding its coloured runs, so it wraps as a unit;
-    // one wider than the band is cut with an ellipsis rather than broken.
+    const { groups, level } = fitStats(st, running.length, e.surface === 'terminal', cols)
+    // One line: the groups were chosen to fit, and the row never wraps. Each
+    // group is one Text holding its coloured runs, so should the estimate be
+    // short, a group is cut with an ellipsis rather than broken.
     const statsRow = (
-      <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
+      <Box flexDirection="row" flexWrap="nowrap" columnGap={groupGap(level)}>
         {groups.map((g, i) => (
           <Text key={`g${i}`} wrap="truncate">
             {g.map((p, j) => (
