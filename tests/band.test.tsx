@@ -725,12 +725,12 @@ test('desktop: the flag stands still and the runner moves toward it by the share
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE, fromShare: 0.6, changedAt: NOW - 250 })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
-  // 140 columns show 140 × 7.5 / 0.7 = 1500 units; the flag stands 18 in, at 1482, so the way runs
-  // 34 → 1456. Runner at 34 + 0.6 × 1422 = 887, gliding from 34 + 0.4 × 1422 = 603, 284 back.
-  expect(source).toContain('<g class="flag" transform="translate(1482.0 45)">')
-  expect(source).toContain('<g transform="translate(887 48)">')
+  // 140 columns show 140 × 7.5 / 0.7 = 1500 units; the flag stands 36 in, at 1464, so the way runs
+  // 34 → 1438. Runner at 34 + 0.6 × 1404 = 876, gliding from 34 + 0.4 × 1404 = 596, 280 back.
+  expect(source).toContain('<g class="flag" transform="translate(1464.0 48)">')
+  expect(source).toContain('<g transform="translate(876 48)">')
   expect(source).toContain('<g class="advance" style="animation-delay: -0.250s">')
-  expect(source).toContain('@keyframes advance { from { transform: translateX(-284.0px); }')
+  expect(source).toContain('@keyframes advance { from { transform: translateX(-280.0px); }')
   expect(source).toContain('>3/5</text>')
   expect(source.includes('cloth wave')).toBe(false)
   expect(source.indexOf('class="flag"')).toBeLessThan(source.indexOf('class="shift"')) // behind the crew
@@ -742,8 +742,8 @@ test('desktop: once every step is done the runner reaches the flag, which waves,
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE.map(i => ({ ...i, status: 'completed' as const })), fromShare: 0.2, changedAt: NOW })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
-  expect(source).toContain('<g class="flag" transform="translate(1482.0 45)">')
-  expect(source).toContain('<g transform="translate(1456 48)">')
+  expect(source).toContain('<g class="flag" transform="translate(1464.0 48)">')
+  expect(source).toContain('<g transform="translate(1438 48)">')
   expect(source).toContain('cloth wave')
   expect((await ui.find({ type: 'Text', text: /^5\/5$/ }))?.props.color).toBe('#4CB782')
   await ui.unmount()
@@ -754,7 +754,7 @@ test('desktop: when a finished list is taken down the runner walks back to its s
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
   expect(source).toContain('<g transform="translate(34 48)">')
-  expect(source).toContain('@keyframes advance { from { transform: translateX(1422.0px); }')
+  expect(source).toContain('@keyframes advance { from { transform: translateX(1404.0px); }')
   expect(source.includes('class="flag"')).toBe(false)
   await ui.unmount()
 })
@@ -773,10 +773,11 @@ test('terminal: the runner walks toward a fixed |> flag by the share done', asyn
   seed(on, EMPTY, STATS, 0, NOW, [], [], { items: FIVE, fromShare: 0.4, changedAt: NOW })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   const [air, floor] = await units(ui)
-  // No followers: start at column 2. The band is 139 wide, so the flag stands at its right end, 136,
-  // and the way runs 2 → 130; runner at 2 + 0.6 × 128 = 79.
-  expect(air?.indexOf('|>')).toBe(136)
-  expect(Math.max(air?.indexOf('(^^)') ?? -1, floor?.indexOf('(^^)') ?? -1)).toBe(79)
+  // No followers: start at column 2. The band is 139 wide; '|>' ends two in from the right, at 135,
+  // as the runner starts two in from the left. The way runs 2 → 129; runner at 2 + 0.6 × 127 = 78.
+  expect(air?.indexOf('|>')).toBe(135)
+  expect(air?.slice(137).trim()).toBe('')
+  expect(Math.max(air?.indexOf('(^^)') ?? -1, floor?.indexOf('(^^)') ?? -1)).toBe(78)
   expect(await units(ui)).toContain('할 일 3/5')
   await ui.unmount()
 })
@@ -804,18 +805,18 @@ test('a todo call that failed changes nothing', async ($, on) => {
 test("the app's own bookkeeping calls (task list, wrap-up) put up no speech bubble", async ($, on) => {
   on('clock.now', () => ({ value: NOW }))
   on('tool.call', () => ({ result: {} }))
-  await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', items: [{ content: 'one', status: 'in_progress' }], scope: 'continuation' } as never).catch(() => undefined)
+  await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', items: [{ content: 'one', status: 'in_progress' }, { content: 'two', status: 'pending' }, { content: 'three', status: 'pending' }], scope: 'continuation' } as never).catch(() => undefined)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
   expect(source.includes('class="bubble"')).toBe(false)
-  expect(source).toContain('>0/1</text>') // the list itself still counts
+  expect(source).toContain('>0/3</text>') // the list itself still counts
   await ui.unmount()
 })
 
 test("desktop: the runner's bubble is cut to the room before the flag, and left out at the flag", async ($, on) => {
   const doingNow = [{ target: 'runner', text: '$ claude plugin test --verbose', at: NOW - 100, seq: 1 }]
-  // 29 of 30 done: runner at 34 + (29 / 30) × 1422 = 1409, flag at 1482;
-  // room ((1482 − 1409 − 4) / 1.1 − 25) / 5.5 = 6 letters.
+  // 29 of 30 done: runner at 34 + (29 / 30) × 1404 = 1391, flag at 1464;
+  // room ((1464 − 1391 − 4) / 1.1 − 25) / 5.5 = 6 letters.
   const most = Array.from({ length: 30 }, (_, n) => step(`s${n}`, n < 29 ? 'completed' : 'in_progress'))
   seed(on, EMPTY, STATS, 7, NOW, [], doingNow, { items: most, fromShare: 0.1, changedAt: NOW - 5000 })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
@@ -840,13 +841,36 @@ test('desktop: the jump squashes about the feet, so a landing does not shove the
   await ui.unmount()
 })
 
-test('desktop: the flag stands small on a faint hill, behind the crew', async ($, on) => {
+test('desktop: the flag stands full size on the ground; its cloth ends as far in from the right as the runner starts from the left', async ($, on) => {
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE, fromShare: 0.4, changedAt: NOW - 5000 })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const source = await svgSource(ui)
-  expect(source).toContain('<path class="hill"')
-  expect(source).toContain('<g transform="translate(0 -13) scale(0.62)" opacity="0.8">')
-  expect(source.indexOf('class="hill"')).toBeLessThan(source.indexOf('class="shift"'))
+  expect(source.includes('class="hill"')).toBe(false)
+  expect(source.includes('scale(0.62)')).toBe(false)
+  // The runner's body starts at 34 − 12 = 22 from the left; the cloth ends at 1464 + 13.6, 22.4 from 1500.
+  expect(source).toContain('<g class="flag" transform="translate(1464.0 48)">')
+  expect(source).toContain('<rect x="0.6" y="-34.4" width="13"')
+  await ui.unmount()
+})
+
+test('a list of one or two steps puts up no flag and the runner stays at its start; the count still shows', async ($, on) => {
+  const two = [step('a', 'completed'), step('b', 'in_progress')]
+  seed(on, EMPTY, STATS, 7, NOW, [], [], { items: two, fromShare: 1, changedAt: NOW - 100 })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const source = await svgSource(ui)
+  expect(source.includes('class="flag"')).toBe(false)
+  expect(source).toContain('<g transform="translate(34 48)">')
+  expect(source).toContain('@keyframes advance { from { transform: translateX(0.0px); }')
+  expect(await units(ui)).toContain('할 일 1/2')
+  await ui.unmount()
+})
+
+test('terminal: a list of two steps puts up no |> flag', async ($, on) => {
+  seed(on, EMPTY, STATS, 0, NOW, [], [], { items: [step('a', 'completed'), step('b')], fromShare: 1, changedAt: NOW })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const [air, floor] = await units(ui)
+  expect((air ?? '').includes('|>')).toBe(false)
+  expect(Math.max(air?.indexOf('(^^)') ?? -1, floor?.indexOf('(^^)') ?? -1)).toBe(2)
   await ui.unmount()
 })
 
@@ -898,7 +922,7 @@ test('the crew remembers its room when a follower joins or leaves, and only then
 test('desktop: the flag stands at the right end of a narrower band too', async ($, on) => {
   seed(on, EMPTY, STATS, 7, NOW, [], [], { items: FIVE, fromShare: 0.4, changedAt: NOW - 5000 })
   const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 100 }, surface: 'desktop' })
-  // 100 columns show 100 × 7.5 / 0.7 ≈ 1071 units; the flag stands 18 in.
-  expect(await svgSource(ui)).toContain('<g class="flag" transform="translate(1053.0 45)">')
+  // 100 columns show 100 × 7.5 / 0.7 ≈ 1071 units; the flag stands 36 in.
+  expect(await svgSource(ui)).toContain('<g class="flag" transform="translate(1035.0 48)">')
   await ui.unmount()
 })

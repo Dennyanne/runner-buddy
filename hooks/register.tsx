@@ -64,7 +64,11 @@ const STEP = 72 // units between followers' slots
 const START_X = 34 // the runner's place with no followers; the hops' ripple is phased from it
 const RIPPLE = 120 / 0.9 // units per second the hops' ripple runs back along the crew
 const JUMP_S = 0.9 // seconds per hop
-const FLAG_EDGE = 18 // the flag stands this far in from the band's right edge, its cloth and count inside
+// The flag stands this far in from the band's right edge: its cloth (13.6
+// wide) then ends as far in from the right as the leftmost body (34 − 12)
+// starts from the left, so the scene is balanced when it first appears.
+const FLAG_EDGE = START_X - 12 + 14
+const FLAG_MIN_STEPS = 3 // a list of fewer steps puts up no flag: too short a run to show
 
 function escapeXml(text: string): string {
   return text
@@ -200,20 +204,21 @@ function body(color: string, isRunner: boolean, mood: Mood, jumpDelayS: number, 
   return `${blob(color, isRunner, mood)}<g class="say" style="animation-delay: ${age}"><rect x="9" y="-45" width="20" height="12" rx="6" fill="#ffffff" stroke="#cfcfcf" stroke-width="0.8"/><text x="19" y="-36.5" text-anchor="middle" class="dots">…</text></g>`
 }
 
-// The share of the list still to do, as the runner's place reads it: 1 (at
-// its start) with no list.
-function shareLeft(td: Todos): number {
-  return td.items.length === 0 ? 1 : remainingShare(td.items)
+// Whether the list is long enough to put up the finish flag.
+function hasFlag(td: Todos): boolean {
+  return td.items.length >= FLAG_MIN_STEPS
 }
 
-// The finish flag for the todo list, at the band's right end: small and faint
-// on a low hill, a goal in the distance. The steps done are over it; it waves
-// once all is done.
-const HORIZON = GROUND - 3 // the hill's foot, just behind the characters' feet
-const HILL_TOP = 13 // the hill's height
-const FAR = 0.62 // the flag's scale, far off
+// The share of the list still to do, as the runner's place reads it: 1 (at
+// its start) with no flag up.
+function shareLeft(td: Todos): number {
+  return hasFlag(td) ? remainingShare(td.items) : 1
+}
+
+// The finish flag for the todo list: a checkered flag on a pole at the band's
+// right end, the steps done over it; it waves once all is done.
 function flagSvg(td: Todos, flagX: number): string {
-  if (td.items.length === 0) return ''
+  if (!hasFlag(td)) return ''
   const { done, total } = todoProgress(td.items)
   let checks = ''
   for (let row = 0; row < 2; row++) {
@@ -221,13 +226,10 @@ function flagSvg(td: Todos, flagX: number): string {
       checks += `<rect x="${1 + col * 3}" y="${-34 + row * 4}" width="3" height="4" fill="${(row + col) % 2 === 0 ? '#2b2b2b' : '#ffffff'}"/>`
     }
   }
-  return `<g class="flag" transform="translate(${flagX.toFixed(1)} ${HORIZON})">
-<path class="hill" d="M -64 0 C -36 0 -22 -${HILL_TOP} 0 -${HILL_TOP} C 22 -${HILL_TOP} 36 0 64 0 Z" fill="#8a8a8a" fill-opacity="0.14"/>
-<g transform="translate(0 -${HILL_TOP}) scale(${FAR})" opacity="0.8">
+  return `<g class="flag" transform="translate(${flagX.toFixed(1)} ${GROUND})">
 <line x1="0" y1="0" x2="0" y2="-35" stroke="#7a7a7a" stroke-width="1.4" stroke-linecap="round"/>
 <g class="${done === total ? 'cloth wave' : 'cloth'}"><rect x="0.6" y="-34.4" width="13" height="8.8" fill="none" stroke="#7a7a7a" stroke-width="0.6"/>${checks}</g>
-</g>
-<text class="steps" x="${(7 * FAR).toFixed(1)}" y="-${HILL_TOP + 25}" text-anchor="middle">${done}/${total}</text>
+<text class="steps" x="7" y="-38" text-anchor="middle">${done}/${total}</text>
 </g>`
 }
 
@@ -250,7 +252,7 @@ function sceneSvg(state: Crew, slots: number, nowMs: number, mood: Mood = 'fresh
   // squash (1.1 wide): cut to the room before it, and left out where not even
   // a few letters fit (at the flag itself).
   const said = busy.find(d => d.target === RUNNER)?.text
-  const bubbleChars = td.items.length === 0 ? BUBBLE_CHARS : Math.floor(((flagX - runnerX - 4) / 1.1 - 16 - 9) / 5.5)
+  const bubbleChars = !hasFlag(td) ? BUBBLE_CHARS : Math.floor(((flagX - runnerX - 4) / 1.1 - 16 - 9) / 5.5)
   const says = said === undefined || bubbleChars < 4 ? undefined : shorten(said, Math.min(BUBBLE_CHARS, bubbleChars))
   // The crew glides from where it stood before the list's last change, and
   // steps aside (or back) when the followers' room last changed.
@@ -391,7 +393,8 @@ function terminalScene(state: Crew, n: number, cols: number, nowMs: number | nul
   const slots = capacity(cols, 1, T_STEP, 24)
   // The runner starts at the left, a slot farther right for each follower's
   // slot in use, and walks right by the share done toward a fixed flag.
-  const flagCol = Math.max(2 + slots * T_STEP + 12, width - 3)
+  // '|>' ends two cells in from the right, as the leftmost sprite starts two in from the left.
+  const flagCol = Math.max(2 + slots * T_STEP + 12, width - 4)
   const startCol = 2 + Math.min(slots, roomOf(state.list)) * T_STEP
   const endCol = flagCol - 6
   const runnerCol = startCol + Math.round((1 - shareLeft(td)) * (endCol - startCol))
@@ -442,7 +445,7 @@ function terminalScene(state: Crew, n: number, cols: number, nowMs: number | nul
     put(metas, col, tool ? shorten(tool.text, T_STEP - 1) : followerMeta({ ...f, model: shortModel(f.model)?.[0] }, nowMs, T_STEP - 1), f.color)
   }
   draw(runnerCol, RUNNER_SPRITES[mood], RUNNER_COLOR, acts.find(r => r.target === RUNNER))
-  if (td.items.length > 0) {
+  if (hasFlag(td)) {
     // |> on the floor at a fixed spot, past where the runner stops.
     const { done, total } = todoProgress(td.items)
     const col = flagCol
@@ -831,10 +834,10 @@ export const register: Register = on => {
       isMainWorking = true
       await prune($)
       const td = (await read($, todos)) ?? NO_TODOS
-      // The runner walks back to its start from the flag.
+      // The runner walks back to its start from the flag (if one was up).
       if (td.items.length > 0 && td.items.every(i => i.status === 'completed')) {
         const now = await $.clock.now()
-        await update($, todos, () => ({ items: [], fromShare: 0, changedAt: now }))
+        await update($, todos, () => ({ items: [], fromShare: shareLeft(td), changedAt: now }))
       }
     }
     await refreshStats($)
