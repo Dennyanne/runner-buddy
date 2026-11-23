@@ -25,9 +25,16 @@ export type Stats = {
   cacheRead: number
   /** The account's rate-limit windows, as the last API response reported them; empty without any. */
   limits?: Limit[]
+  /** How the session is billed: a claude.ai subscription, per use (console, API key, cloud), or not known. */
+  plan?: Plan
+  /** The session's cost so far, a client-side estimate; absent where the host keeps no ledger. */
+  usd?: number
+  /** True once `usd` includes a model priced at another's rates. */
+  hasUnknownPrice?: boolean
   /** When these were read, `$.clock.now()` ms: a time base for drawing. */
   at: number
 }
+export type Plan = 'subscription' | 'usage' | 'unknown'
 /** One rate-limit window: `five_hour`, `seven_day`, or a gateway's `spend_limit`. */
 export type Limit = { kind: string; percentUsed: number; resetsAt?: string }
 

@@ -3,6 +3,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { Crew, Doing, Follower, Reaction, ReactionKind, Stats, Tokens } from '../types'
 
+import { planOf } from './plan'
 import { toolLabel } from './tool-label'
 
 const frame = atom({ plugin: 'runner-buddy', key: 'frame' } as const, 0)
@@ -466,7 +467,7 @@ function formatUntil(resetsAt: string | undefined, nowMs: number): string | null
 
 // The usage row as groups, each drawn as one unit that never breaks inside:
 // on a narrow band whole groups move to the next line.
-//   ctx [████░░░░░░] 42% 116k 남음 | 5h 38% (2h13m) | 주간 12% (3d4h) | 토큰 in 1.2M / out 34k | 캐시 적중 87% | 에이전트 3
+//   ctx [████░░░░░░] 42% 116k 남음 | 5h 38% (2h13m)  주간 12% (3d4h) | 토큰 in 1.2M / out 34k | 캐시 적중 87% | 요금 구독제 | 에이전트 3
 function statGroups(st: Stats | null, crewCount: number, isTerminal: boolean): Part[][] {
   const groups: Part[][] = []
   const ctx: Part[] = [{ text: 'ctx ', dim: true }]
@@ -486,27 +487,51 @@ function statGroups(st: Stats | null, crewCount: number, isTerminal: boolean): P
   }
   groups.push(ctx)
   if (st !== null) {
+    // All the rate-limit windows together, as one unit: they read as a pair.
+    const windows: Part[] = []
     for (const limit of st.limits ?? []) {
       const pct = Math.max(0, Math.round(limit.percentUsed))
-      const window: Part[] = [{ text: `${LIMIT_LABELS[limit.kind] ?? limit.kind} `, dim: true }, { text: `${pct}%`, color: limitColor(pct) }]
+      if (windows.length > 0) windows.push({ text: '  ' })
+      windows.push({ text: `${LIMIT_LABELS[limit.kind] ?? limit.kind} `, dim: true }, { text: `${pct}%`, color: limitColor(pct) })
       const until = formatUntil(limit.resetsAt, st.at)
-      if (until) window.push({ text: ` (${until})`, dim: true })
-      groups.push(window)
+      if (until) windows.push({ text: ` (${until})`, dim: true })
     }
+    if (windows.length > 0) groups.push(windows)
     groups.push([{ text: '토큰 ', dim: true }, { text: `in ${formatCount(st.input)} / out ${formatCount(st.output)}` }])
     const hit = st.input > 0 ? Math.round((st.cacheRead / st.input) * 100) : null
     groups.push([
       { text: '캐시 적중 ', dim: true },
       hit === null ? { text: '--', dim: true } : { text: `${hit}%`, color: cacheColor(hit) },
     ])
+    // On a subscription, use inside the plan is not billed in dollars: say so
+    // instead of a figure. Otherwise the engine's estimate, labelled as one.
+    if (st.plan === 'subscription') {
+      groups.push([{ text: '요금 ', dim: true }, { text: '구독제' }])
+    } else if (st.usd !== undefined) {
+      groups.push([
+        { text: '요금 ', dim: true },
+        { text: `~$${st.usd.toFixed(2)}${st.hasUnknownPrice ? '*' : ''}` },
+        { text: ' (추정)', dim: true },
+      ])
+    }
   }
   if (crewCount > 0) groups.push([{ text: `에이전트 ${crewCount}`, dim: true }])
   return groups
 }
 
+// How the session is signed in, read once: it does not change within a session.
+let signedInAs: string | null = null
+
 async function refreshStats($: EngineInterface) {
   const usage = await $.session.usage()
   const t = await read($, tokens)
+  if (signedInAs === null) {
+    try {
+      signedInAs = (await $.session.identity()).kind ?? null
+    } catch {
+      // Not answered: the rate-limit windows decide.
+    }
+  }
   const fresh: Stats = {
     ctxTokens: usage.context.tokens ?? null,
     ctxWindow: usage.context.window,
@@ -519,6 +544,9 @@ async function refreshStats($: EngineInterface) {
       percentUsed: l.percentUsed,
       ...(l.resetsAt ? { resetsAt: l.resetsAt } : {}),
     })),
+    plan: planOf(signedInAs, usage.rateLimits.length > 0),
+    ...(usage.cost ? { usd: usage.cost.usd } : {}),
+    ...(usage.cost?.hasUnknownPrice ? { hasUnknownPrice: true } : {}),
     at: await $.clock.now(),
   }
   await update($, stats, () => fresh)
