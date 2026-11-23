@@ -1,6 +1,6 @@
 {
   "name": "runner-buddy",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Claude가 작업하는 동안 프롬프트 위에서 캐릭터가 장애물을 뛰어넘고, 서브에이전트가 뒤따라 달리며, 컨텍스트·토큰·캐시 적중률을 보여줍니다",
   "author": { "name": "Dennyanne" },
   "types": "./types/index.d.ts",
